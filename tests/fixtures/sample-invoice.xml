@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<HDon xmlns="urn:example:invoice">
+  <DLHDon Id="INV-001">
+    <TTChung>
+      <KHMSHDon>1</KHMSHDon>
+      <KHHDon>C26TABC</KHHDon>
+      <SHDon>123</SHDon>
+      <NLap>2026-09-20</NLap>
+      <DVTTe>VND</DVTTe>
+      <TGia>1</TGia>
+      <MSTTCGP>0100000000</MSTTCGP>
+    </TTChung>
+    <NDHDon>
+      <NBan><Ten>Công ty bán</Ten><MST>0101111111</MST><DChi>Hà Nội</DChi></NBan>
+      <NMua><Ten>Công ty mua</Ten><MST>0302222222</MST><DChi>TP.HCM</DChi></NMua>
+      <DSHHDVu>
+        <HHDVu><STT>1</STT><MHHDVu>SP01</MHHDVu><THHDVu>Sản phẩm A</THHDVu><DVTinh>Cái</DVTinh><SLuong>2</SLuong><DGia>100000</DGia><TSuat>10%</TSuat><ThTien>200000</ThTien><TThue>20000</TThue></HHDVu>
+        <HHDVu><STT>2</STT><MHHDVu>SP02</MHHDVu><THHDVu>Sản phẩm B</THHDVu><DVTinh>Cái</DVTinh><SLuong>1</SLuong><DGia>50000</DGia><TSuat>8%</TSuat><ThTien>50000</ThTien><TThue>4000</TThue></HHDVu>
+      </DSHHDVu>
+      <TToan><TgTCThue>250000</TgTCThue><TgTThue>24000</TgTThue><TgTTTBSo>274000</TgTTTBSo><TgTTTBChu>Hai trăm bảy mươi bốn nghìn đồng</TgTTTBChu></TToan>
+    </NDHDon>
+    <MCCQT>ABC123</MCCQT>
+  </DLHDon>
+</HDon>
+

@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+output/
+work/
+logs/
+*.zip
+*.xlsx
+*.xlsm
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
