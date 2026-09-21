@@ -25,9 +25,9 @@ try {
         throw "Không tìm thấy thư mục XML: $sourceDirectory"
     }
 
-    $direction = (Get-EnvValue -Values $values -Name 'LOCAL_DIRECTION' -Default 'purchase').ToLowerInvariant()
-    if ($direction -notin @('purchase', 'sold')) {
-        throw 'LOCAL_DIRECTION phải là purchase hoặc sold.'
+    $direction = (Get-EnvValue -Values $values -Name 'LOCAL_DIRECTION' -Default 'auto').ToLowerInvariant()
+    if ($direction -notin @('auto', 'purchase', 'sold')) {
+        throw 'LOCAL_DIRECTION phải là auto, purchase hoặc sold.'
     }
 
     $outputDirectory = Resolve-RepositoryPath -RepositoryRoot $PSScriptRoot -Value (Get-EnvValue -Values $values -Name 'OUTPUT_DIR' -Default 'output')
@@ -47,7 +47,8 @@ try {
     $logFile = Start-HddtLogging -Directory (Join-Path $outputDirectory 'logs') -Level $logLevel -ToFile $logToFile -RunName 'parse-local'
     $loggingStarted = $true
     Write-HddtLog INFO ('Bắt đầu parse XML local: {0}' -f $sourceDirectory)
-    Write-HddtLog INFO ('Loại: {0} | đầu ra: {1}' -f $direction, $outputWorkbook)
+    $directionText = if ($direction -eq 'auto') { 'tự nhận diện theo thư mục/tên file' } else { $direction }
+    Write-HddtLog INFO ('Loại: {0} | đầu ra: {1}' -f $directionText, $outputWorkbook)
     if ($logToFile) { Write-HddtLog INFO ('Nhật ký: {0}' -f $logFile) }
 
     $xmlFiles = @(Get-ChildItem -LiteralPath $sourceDirectory -Recurse -File -Filter '*.xml' | Sort-Object FullName)
@@ -61,9 +62,11 @@ try {
 
     foreach ($file in $xmlFiles) {
         $current++
+        $fileDirection = $direction
         Write-HddtLog DEBUG ('Đang parse {0}' -f $file.FullName)
         try {
-            $parsed = ConvertFrom-InvoiceXml -Path $file.FullName -Direction $direction -Source 'local-xml'
+            $fileDirection = Resolve-LocalInvoiceDirection -Path $file.FullName -RootDirectory $sourceDirectory -ConfiguredDirection $direction
+            $parsed = ConvertFrom-InvoiceXml -Path $file.FullName -Direction $fileDirection -Source 'local-xml'
             $summaryRows.Add($parsed.Summary)
             foreach ($detail in $parsed.Details) { $detailRows.Add($detail) }
             if (($current % $progressEvery) -eq 0 -or $current -eq $xmlFiles.Count) {
@@ -73,7 +76,7 @@ try {
         }
         catch {
             $errorRows.Add([pscustomobject]@{
-                Direction = $direction
+                Direction = $fileDirection
                 Source = 'local-xml'
                 Invoice = $file.FullName
                 Error = $_.Exception.Message

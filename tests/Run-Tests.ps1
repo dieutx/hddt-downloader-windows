@@ -26,6 +26,20 @@ Assert-Equal 20000 $parsed.Details[0].TaxAmount 'First item tax'
 Assert-Equal 220000 $parsed.Details[0].AmountWithTax 'First item amount with tax fallback'
 Assert-Equal 'Sản phẩm B' $parsed.Details[1].Description 'Second item description'
 
+$directionRoot = Join-Path ([IO.Path]::GetTempPath()) ('hddt-direction-' + [guid]::NewGuid().ToString('N'))
+$purchaseFolder = Join-Path $directionRoot 'purchase'
+$soldFolder = Join-Path $directionRoot 'sold'
+New-Item -ItemType Directory -Path $purchaseFolder, $soldFolder -Force | Out-Null
+try {
+    Assert-Equal 'purchase' (Resolve-LocalInvoiceDirection -Path (Join-Path $purchaseFolder 'invoice.xml') -RootDirectory $directionRoot -ConfiguredDirection 'auto') 'Auto direction from purchase folder'
+    Assert-Equal 'sold' (Resolve-LocalInvoiceDirection -Path (Join-Path $soldFolder 'invoice.xml') -RootDirectory $directionRoot -ConfiguredDirection 'auto') 'Auto direction from sold folder'
+    Assert-Equal 'purchase' (Resolve-LocalInvoiceDirection -Path (Join-Path $directionRoot 'purchase_query_test.xml') -RootDirectory $directionRoot -ConfiguredDirection 'auto') 'Auto direction from legacy file name'
+    Assert-Equal 'sold' (Resolve-LocalInvoiceDirection -Path (Join-Path $purchaseFolder 'invoice.xml') -RootDirectory $directionRoot -ConfiguredDirection 'sold') 'Explicit direction overrides folder'
+}
+finally {
+    Remove-Item -LiteralPath $directionRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 $ranges = @(Get-MonthDateRanges -FromDate ([datetime]'2026-08-20') -ToDate ([datetime]'2026-10-02'))
 Assert-Equal 3 $ranges.Count 'Monthly date range count'
 Assert-Equal ([datetime]'2026-08-31') $ranges[0].To 'First monthly range end'
@@ -109,6 +123,33 @@ try {
         Assert-Equal 1 @($zip.Entries | Where-Object FullName -eq 'xl/workbook.xml').Count 'Workbook package entry'
         Assert-Equal 3 @($zip.Entries | Where-Object FullName -like 'xl/worksheets/sheet*.xml').Count 'Worksheet package count'
         Assert-Equal 2 @($zip.Entries | Where-Object FullName -like 'xl/tables/table*.xml').Count 'Table package count'
+
+        for ($sheetNumber = 1; $sheetNumber -le 3; $sheetNumber++) {
+            $sheetEntry = $zip.GetEntry("xl/worksheets/sheet$sheetNumber.xml")
+            $sheetReader = New-Object IO.StreamReader($sheetEntry.Open())
+            try { [xml]$sheetDocument = $sheetReader.ReadToEnd() }
+            finally { $sheetReader.Dispose() }
+            $sheetNamespaceManager = New-Object Xml.XmlNamespaceManager($sheetDocument.NameTable)
+            $sheetNamespaceManager.AddNamespace('x', $script:SpreadsheetNamespace)
+            $sheetTableCount = @($sheetDocument.SelectNodes('/x:worksheet/x:tableParts/x:tablePart', $sheetNamespaceManager)).Count
+            $sheetFilterCount = @($sheetDocument.SelectNodes('/x:worksheet/x:autoFilter', $sheetNamespaceManager)).Count
+            if ($sheetTableCount -gt 0) {
+                Assert-Equal 0 $sheetFilterCount "Sheet $sheetNumber does not duplicate table AutoFilter at worksheet level"
+            }
+            else {
+                Assert-Equal 1 $sheetFilterCount "Sheet $sheetNumber keeps worksheet AutoFilter when there is no table"
+            }
+        }
+
+        $stylesEntry = $zip.GetEntry('xl/styles.xml')
+        $stylesReader = New-Object IO.StreamReader($stylesEntry.Open())
+        try { [xml]$stylesDocument = $stylesReader.ReadToEnd() }
+        finally { $stylesReader.Dispose() }
+        $namespaceManager = New-Object Xml.XmlNamespaceManager($stylesDocument.NameTable)
+        $namespaceManager.AddNamespace('x', $script:SpreadsheetNamespace)
+        $headerFont = $stylesDocument.SelectSingleNode('/x:styleSheet/x:fonts/x:font[2]', $namespaceManager)
+        $headerFontOrder = (($headerFont.ChildNodes | ForEach-Object { $_.LocalName }) -join ',')
+        Assert-Equal 'b,sz,color,name' $headerFontOrder 'Header font element order follows Open XML schema'
     }
     finally { $zip.Dispose() }
 }

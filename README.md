@@ -34,6 +34,25 @@ notepad .env
 
 ## Chức năng 1: Tải XML từ GDT và tạo Excel
 
+### Lấy token đăng nhập GDT
+
+1. Đăng nhập tại [hoadondientu.gdt.gov.vn](https://hoadondientu.gdt.gov.vn/).
+2. Khi vẫn đang ở trang GDT, nhấn `F12` và mở tab **Console**.
+3. Dán đoạn JavaScript sau rồi nhấn `Enter`:
+
+```javascript
+const t = (document.cookie.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/) || [])[0];
+t ? console.log("Bearer " + t) : console.log("❌ Không tìm thấy token");
+```
+
+4. Sao chép chuỗi bắt đầu bằng `Bearer ` và điền vào `GDT_TOKEN` trong `.env`:
+
+```dotenv
+GDT_TOKEN=Bearer eyJ...
+```
+
+Token là thông tin đăng nhập nhạy cảm: chỉ chạy đoạn mã trên đúng website GDT, không gửi token cho người khác và không đưa token vào Git. Nếu báo không tìm thấy token, hãy đăng nhập lại hoặc tải lại trang GDT rồi thử lại.
+
 Điền tối thiểu các dòng sau trong `.env`:
 
 ```dotenv
@@ -62,7 +81,7 @@ REDOWNLOAD_XML=true
 run.cmd
 ```
 
-Chương trình tải từng hóa đơn, chỉ lưu XML vào một thư mục chung và tạo workbook gồm bảng tổng hợp, bảng chi tiết và danh sách lỗi. Dữ liệu ZIP từ API chỉ được giải nén trong bộ nhớ, không lưu thành file `.zip`.
+Chương trình tải từng hóa đơn và tạo workbook gồm bảng tổng hợp, bảng chi tiết và danh sách lỗi. XML mua vào và bán ra được tách thành hai thư mục; không tạo thư mục riêng cho từng hóa đơn. Dữ liệu ZIP từ API chỉ được giải nén trong bộ nhớ, không lưu thành file `.zip`.
 
 Kết quả mặc định:
 
@@ -70,7 +89,10 @@ Kết quả mặc định:
 output\
   HoaDonDienTu.xlsx
   xml\
-    purchase_query_MST_MAU_KYHIEU_SO.xml
+    purchase\
+      purchase_query_MST_MAU_KYHIEU_SO.xml
+    sold\
+      sold_query_MST_MAU_KYHIEU_SO.xml
   logs\
     download_YYYYMMDD_HHMMSS.log
 ```
@@ -82,8 +104,8 @@ Chức năng này không tải dữ liệu, không gọi API GDT và không sử
 Điền trong `.env`:
 
 ```dotenv
-LOCAL_XML_DIR=E:\duong-dan\toi\thu-muc-xml
-LOCAL_DIRECTION=purchase
+LOCAL_XML_DIR=output\xml
+LOCAL_DIRECTION=auto
 LOCAL_OUTPUT_XLSX=HoaDonDienTu_Local.xlsx
 ```
 
@@ -93,10 +115,13 @@ Sau đó chạy:
 parse-local.cmd
 ```
 
-`LOCAL_DIRECTION` chỉ dùng để gắn nhãn nguồn dữ liệu trong file Excel:
+`LOCAL_DIRECTION` quyết định cách phân loại XML:
 
-- `purchase`: đánh dấu toàn bộ XML là hóa đơn mua vào.
-- `sold`: đánh dấu toàn bộ XML là hóa đơn bán ra.
+- `auto`: tự nhận diện từng file theo thư mục `purchase`/`sold` hoặc tiền tố tên file. Dùng lựa chọn này khi parse toàn bộ `output\xml`.
+- `purchase`: ép toàn bộ XML trong thư mục thành hóa đơn mua vào.
+- `sold`: ép toàn bộ XML trong thư mục thành hóa đơn bán ra.
+
+Vì vậy có thể đặt `LOCAL_XML_DIR=output\xml` để parse cả hai nhóm trong một lần mà không bị gắn sai loại.
 
 File Excel được tạo trong `OUTPUT_DIR`; mặc định là `output\HoaDonDienTu_Local.xlsx`.
 
@@ -135,7 +160,7 @@ File Excel được tạo trong `OUTPUT_DIR`; mặc định là `output\HoaDonDi
 | Biến | Giá trị có thể nhập | Ý nghĩa |
 |---|---|---|
 | `LOCAL_XML_DIR` | Đường dẫn thư mục | Thư mục chứa XML cần parse; có đọc cả thư mục con. |
-| `LOCAL_DIRECTION` | `purchase`, `sold` | Nhãn mua vào hoặc bán ra ghi vào Excel. |
+| `LOCAL_DIRECTION` | `auto`, `purchase`, `sold` | `auto` nhận diện từng file; hai giá trị còn lại ép toàn bộ thư mục về một loại. |
 | `LOCAL_OUTPUT_XLSX` | Tên file `.xlsx` | Tên file Excel được tạo từ XML có sẵn. |
 
 URL API được cố định trong mã nguồn. Authorization header không được gửi tới host khác. Token không được ghi vào log hoặc workbook.

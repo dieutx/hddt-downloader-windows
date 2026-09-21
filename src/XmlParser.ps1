@@ -1,5 +1,37 @@
 ﻿Set-StrictMode -Version 2.0
 
+function Resolve-LocalInvoiceDirection {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$RootDirectory,
+        [Parameter(Mandatory = $true)][ValidateSet('auto', 'purchase', 'sold')][string]$ConfiguredDirection
+    )
+
+    if ($ConfiguredDirection -ne 'auto') { return $ConfiguredDirection }
+
+    $root = [IO.Path]::GetFullPath($RootDirectory).TrimEnd([char[]]@('\', '/'))
+    $fullPath = [IO.Path]::GetFullPath($Path)
+    $rootName = [IO.Path]::GetFileName($root)
+    if ($rootName -in @('purchase', 'sold')) { return $rootName.ToLowerInvariant() }
+
+    $relativePath = $fullPath
+    $rootPrefix = $root + [IO.Path]::DirectorySeparatorChar
+    if ($fullPath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        $relativePath = $fullPath.Substring($rootPrefix.Length)
+    }
+
+    foreach ($segment in ($relativePath -split '[\\/]')) {
+        $normalizedSegment = $segment.ToLowerInvariant()
+        if ($normalizedSegment -in @('purchase', 'sold')) { return $normalizedSegment }
+    }
+
+    $baseName = [IO.Path]::GetFileNameWithoutExtension($fullPath)
+    if ($baseName -match '(?i)^(purchase|sold)_') { return $Matches[1].ToLowerInvariant() }
+
+    throw "Không xác định được XML mua vào hay bán ra: $fullPath. Hãy đặt file trong thư mục purchase/sold hoặc đặt LOCAL_DIRECTION rõ ràng."
+}
+
 function Get-XmlText {
     param($Node, [string]$XPath, [string]$Default = '')
     if ($null -eq $Node) { return $Default }

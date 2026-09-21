@@ -157,13 +157,16 @@ function Save-GdtInvoiceXml {
     $payload = 'nbmst={0}&khhdon={1}&shdon={2}&khmshdon={3}' -f $sellerTaxCode, $invoiceSeries, $invoiceNumber, $invoiceTemplate
     $uri = '{0}/{1}/invoices/export-xml?{2}' -f $Config.BaseUrl, $Invoice.Source, $payload
 
+    $directionDirectory = Join-Path $Config.XmlDirectory $Invoice.Direction
+    New-Item -ItemType Directory -Path $directionDirectory -Force | Out-Null
+
     $baseName = ConvertTo-SafeFileName ('{0}_{1}_{2}_{3}_{4}_{5}' -f $Invoice.Direction, $Invoice.Source, $Invoice.SellerTaxCode, $Invoice.InvoiceTemplate, $Invoice.InvoiceSeries, $Invoice.InvoiceNumber)
     $namePattern = '^{0}(?:_\d+)?$' -f [regex]::Escape($baseName)
-    $existingXmlFiles = @(Get-ChildItem -LiteralPath $Config.XmlDirectory -Filter '*.xml' -File -ErrorAction SilentlyContinue |
+    $existingXmlFiles = @(Get-ChildItem -LiteralPath $directionDirectory -Filter '*.xml' -File -ErrorAction SilentlyContinue |
         Where-Object { $_.BaseName -match $namePattern } |
         Select-Object -ExpandProperty FullName)
     if (-not $Config.RedownloadXml -and $existingXmlFiles.Count -gt 0) {
-        Write-HddtLog DEBUG ('Tái sử dụng {0} XML đã tải trong thư mục chung.' -f $existingXmlFiles.Count)
+        Write-HddtLog DEBUG ('Tái sử dụng {0} XML đã tải trong thư mục {1}.' -f $existingXmlFiles.Count, $directionDirectory)
         return $existingXmlFiles
     }
     if ($Config.RedownloadXml) {
@@ -174,13 +177,13 @@ function Save-GdtInvoiceXml {
 
     $responseBytes = [byte[]](Invoke-GdtRequest -Config $Config -Uri $uri -AsBytes)
     try {
-        $xmlFiles = @(Expand-InvoiceXmlBytes -Bytes $responseBytes -DestinationDirectory $Config.XmlDirectory -FileNamePrefix $baseName)
+        $xmlFiles = @(Expand-InvoiceXmlBytes -Bytes $responseBytes -DestinationDirectory $directionDirectory -FileNamePrefix $baseName)
     }
     catch {
         throw "Không đọc được XML trả về cho $(Get-InvoiceLabel $Invoice): $($_.Exception.Message)"
     }
 
     if ($xmlFiles.Count -eq 0) { throw 'Phản hồi không chứa file XML.' }
-    Write-HddtLog DEBUG ('Đã ghi {0} XML vào thư mục chung {1}; không lưu file ZIP.' -f $xmlFiles.Count, $Config.XmlDirectory)
+    Write-HddtLog DEBUG ('Đã ghi {0} XML vào thư mục {1}; không lưu file ZIP.' -f $xmlFiles.Count, $directionDirectory)
     return $xmlFiles
 }

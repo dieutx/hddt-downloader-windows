@@ -21,6 +21,9 @@ try {
     $config = Get-HddtConfig -EnvFile $EnvFile -RepositoryRoot $PSScriptRoot
     New-Item -ItemType Directory -Path $config.OutputDirectory -Force | Out-Null
     New-Item -ItemType Directory -Path $config.XmlDirectory -Force | Out-Null
+    foreach ($direction in $config.Directions) {
+        New-Item -ItemType Directory -Path (Join-Path $config.XmlDirectory $direction) -Force | Out-Null
+    }
     $logFile = Start-HddtLogging -Directory $config.LogDirectory -Level $config.LogLevel -ToFile $config.LogToFile -RunName 'download'
     $loggingStarted = $true
 
