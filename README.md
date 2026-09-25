@@ -84,13 +84,27 @@ pwsh-preview --version
 
 Bản preview dùng lệnh **`pwsh-preview`**.
 
-### Linux hoặc bản ổn định
+### Ubuntu / Debian
 
-Sau khi cài PowerShell 7, kiểm tra bằng:
+Cài PowerShell 7 ổn định từ kho Microsoft:
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y wget apt-transport-https software-properties-common
+
+. /etc/os-release
+wget -q "https://packages.microsoft.com/config/$ID/$VERSION_ID/packages-microsoft-prod.deb"
+sudo dpkg -i packages-microsoft-prod.deb
+rm packages-microsoft-prod.deb
+
+sudo apt-get update
+sudo apt-get install -y powershell
 pwsh --version
 ```
+
+Lệnh `pwsh --version` phải trả về số phiên bản PowerShell 7 trở lên. Nếu dùng bản preview trên Linux, lệnh tương ứng là `pwsh-preview --version`.
+
+Các bản phân phối khác: xem [hướng dẫn cài PowerShell trên Linux](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-linux).
 
 ### Chạy chương trình
 
