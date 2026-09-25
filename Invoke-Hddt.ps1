@@ -74,14 +74,9 @@ try {
     Write-HddtLog INFO ('[CẤU HÌNH] Đầu ra: {0}' -f $config.OutputWorkbook)
     if ($config.LogToFile) { Write-HddtLog INFO ('[CẤU HÌNH] Nhật ký: {0}' -f $logFile) }
 
-    if (-not [string]::IsNullOrWhiteSpace($config.Username)) {
-        Write-HddtLog INFO ('[ĐĂNG NHẬP] Bắt đầu đăng nhập tài khoản {0}: tự lấy và nhận diện CAPTCHA.' -f $config.Username)
-        $config.Token = Invoke-GdtLogin -Config $config
-        Write-HddtLog INFO ('[ĐĂNG NHẬP] Thành công | token chỉ giữ trong bộ nhớ phiên | {0}' -f (Get-HddtElapsedText))
-    }
-    else {
-        Write-HddtLog INFO '[ĐĂNG NHẬP] Dùng GDT_TOKEN từ .env; request danh sách đầu tiên sẽ xác thực token.'
-    }
+    Write-HddtLog INFO ('[ĐĂNG NHẬP] Bắt đầu đăng nhập tài khoản {0}: tự lấy và nhận diện CAPTCHA.' -f $config.Username)
+    $config.Token = Invoke-GdtLogin -Config $config
+    Write-HddtLog INFO ('[ĐĂNG NHẬP] Thành công | token chỉ giữ trong bộ nhớ phiên | {0}' -f (Get-HddtElapsedText))
 
     $allInvoices = New-Object System.Collections.Generic.List[object]
     $indexErrors = New-Object System.Collections.Generic.List[object]

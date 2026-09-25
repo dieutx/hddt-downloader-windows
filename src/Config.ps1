@@ -26,7 +26,7 @@ function Read-DotEnvFile {
             }
             else {
                 # Cho phép inline comment kiểu `.env.example` (sau khoảng trắng),
-                # nhưng không đụng vào dấu # nằm trong mật khẩu/token.
+                # nhưng không đụng vào dấu # nằm trong mật khẩu.
                 $commentIndex = $value.IndexOf(' ;', [StringComparison]::Ordinal)
                 if ($commentIndex -lt 0) { $commentIndex = $value.IndexOf("`t#", [StringComparison]::Ordinal) }
                 if ($commentIndex -ge 0) { $value = $value.Substring(0, $commentIndex).Trim() }
@@ -142,17 +142,8 @@ function Complete-HddtInteractiveValues {
     $defaultFrom = $today.Date.AddDays(1 - $today.Day)
     $defaultTo = $today.Date
 
-    $token = Read-HddtInteractiveSecret -Existing (Get-EnvValue $valuesCopy 'GDT_TOKEN' '') -Prompt 'GDT_TOKEN (để trống nếu dùng tài khoản)'
-    if (-not [string]::IsNullOrWhiteSpace($token)) {
-        $valuesCopy['GDT_TOKEN'] = $token
-        $valuesCopy['GDT_USERNAME'] = ''
-        $valuesCopy['GDT_PASSWORD'] = ''
-    }
-    else {
-        $valuesCopy['GDT_TOKEN'] = ''
-        $valuesCopy['GDT_USERNAME'] = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'GDT_USERNAME' '') -Prompt 'GDT_USERNAME' -Default ''
-        $valuesCopy['GDT_PASSWORD'] = Read-HddtInteractiveSecret -Existing (Get-EnvValue $valuesCopy 'GDT_PASSWORD' '') -Prompt 'GDT_PASSWORD'
-    }
+    $valuesCopy['GDT_USERNAME'] = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'GDT_USERNAME' '') -Prompt 'GDT_USERNAME' -Default ''
+    $valuesCopy['GDT_PASSWORD'] = Read-HddtInteractiveSecret -Existing (Get-EnvValue $valuesCopy 'GDT_PASSWORD' '') -Prompt 'GDT_PASSWORD'
 
     $valuesCopy['INVOICE_DIRECTION'] = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'INVOICE_DIRECTION' 'both') -Prompt 'INVOICE_DIRECTION (purchase/sold/both)' -Default 'both'
     $valuesCopy['FROM_DATE'] = Read-HddtInteractiveDate -Existing (Get-EnvValue $valuesCopy 'FROM_DATE' '') -Prompt 'FROM_DATE' -Default $defaultFrom
@@ -210,30 +201,16 @@ function Get-HddtConfig {
         $values = Read-DotEnvFile -Path $EnvFile
     }
 
-    # Hai cách đăng nhập: dán sẵn GDT_TOKEN, hoặc điền GDT_USERNAME + GDT_PASSWORD
-    # để chương trình tự lấy CAPTCHA và đăng nhập (tương ứng frmDangNhap trong VBA).
-    $token = Get-EnvValue $values 'GDT_TOKEN' ''
+    # Chỉ dùng đăng nhập bằng tài khoản GDT. Token do chương trình tự lấy sau
+    # khi CAPTCHA thành công và chỉ tồn tại trong bộ nhớ của phiên chạy.
     $username = Get-EnvValue $values 'GDT_USERNAME' ''
     $password = Get-EnvValue $values 'GDT_PASSWORD' ''
     $hasUsername = -not [string]::IsNullOrWhiteSpace($username)
     $hasPassword = -not [string]::IsNullOrWhiteSpace($password)
-    if ($hasUsername -xor $hasPassword) {
-        throw 'Phải điền cả GDT_USERNAME và GDT_PASSWORD (hoặc để trống cả hai).'
+    if (-not $hasUsername -or -not $hasPassword) {
+        throw 'Thiếu thông tin đăng nhập: cần điền cả GDT_USERNAME và GDT_PASSWORD.'
     }
-    if (-not $hasUsername -and [string]::IsNullOrWhiteSpace($token)) {
-        throw 'Thiếu thông tin đăng nhập trong .env: điền GDT_TOKEN, hoặc cả GDT_USERNAME và GDT_PASSWORD.'
-    }
-    $useLogin = $hasUsername -and $hasPassword
-    if (-not $useLogin) {
-        $token = $token.Trim()
-        $token = $token -replace '^(?i)Bearer\s+', ''
-        if ($token.IndexOf("`r") -ge 0 -or $token.IndexOf("`n") -ge 0 -or $token.Length -lt 20) {
-            throw 'GDT_TOKEN không hợp lệ.'
-        }
-    }
-    else {
-        $token = ''
-    }
+    $token = ''
 
     $direction = (Get-EnvValue -Values $values -Name 'INVOICE_DIRECTION' -Default 'both').ToLowerInvariant()
     switch ($direction) {
@@ -308,8 +285,8 @@ function Get-HddtConfig {
 
     return [pscustomobject]@{
         Token = $token
-        Username = if ($useLogin) { $username.Trim() } else { '' }
-        Password = if ($useLogin) { $password } else { '' }
+        Username = $username.Trim()
+        Password = $password
         BaseUrl = 'https://hoadondientu.gdt.gov.vn/api'
         ProxyUri = $proxyUri
         ProxyUsername = $proxyUsername

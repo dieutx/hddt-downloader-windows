@@ -344,7 +344,8 @@ finally {
 $tempEnv = Join-Path ([IO.Path]::GetTempPath()) ('hddt-test-' + [guid]::NewGuid().ToString('N') + '.env')
 try {
     @'
-GDT_TOKEN=Bearer abcdefghijklmnopqrstuvwxyz123456
+GDT_USERNAME=tester
+GDT_PASSWORD=secret-password
 INVOICE_DIRECTION=purchase ; inline comment
 FROM_DATE=01/09/2026
 TO_DATE=30/09/2026
@@ -352,7 +353,9 @@ OUTPUT_DIR=output
 OUTPUT_XLSX=test.xlsx
 '@ | Set-Content -LiteralPath $tempEnv -Encoding UTF8
     $config = Get-HddtConfig -EnvFile $tempEnv -RepositoryRoot $root
-    Assert-Equal 'abcdefghijklmnopqrstuvwxyz123456' $config.Token 'Bearer normalization'
+    Assert-Equal '' $config.Token 'Runtime token starts empty until automatic login'
+    Assert-Equal 'tester' $config.Username 'Username parsed from .env'
+    Assert-Equal 'secret-password' $config.Password 'Password parsed from .env'
     Assert-Equal 1 $config.Directions.Count 'Direction count'
     Assert-Equal 'purchase' $config.Directions[0] 'Direction value'
     Assert-Equal 600 $config.RequestDelayMs 'Default global request delay'
@@ -371,7 +374,8 @@ finally {
 $tempProxyEnv = Join-Path ([IO.Path]::GetTempPath()) ('hddt-test-' + [guid]::NewGuid().ToString('N') + '.env')
 try {
     @'
-GDT_TOKEN=abcdefghijklmnopqrstuvwxyz123456
+GDT_USERNAME=tester
+GDT_PASSWORD=secret-password
 INVOICE_DIRECTION=purchase
 FROM_DATE=01/09/2026
 TO_DATE=30/09/2026
@@ -385,7 +389,8 @@ PROXY_URL=proxy.example:8080:proxy-user:proxy-pass
     Assert-Equal 'proxy-pass' $proxyConfig.ProxyPassword 'Compact proxy password is extracted'
 
     @'
-GDT_TOKEN=abcdefghijklmnopqrstuvwxyz123456
+GDT_USERNAME=tester
+GDT_PASSWORD=secret-password
 INVOICE_DIRECTION=purchase
 FROM_DATE=01/09/2026
 TO_DATE=30/09/2026
@@ -399,7 +404,8 @@ PROXY_URL=http://user:password@proxy.example:8080
     Assert-Equal $true $embeddedProxyRejected 'Proxy URI userinfo is rejected'
 
     @'
-GDT_TOKEN=abcdefghijklmnopqrstuvwxyz123456
+GDT_USERNAME=tester
+GDT_PASSWORD=secret-password
 INVOICE_DIRECTION=purchase
 FROM_DATE=01/09/2026
 TO_DATE=30/09/2026
@@ -417,10 +423,10 @@ finally {
     Remove-Item -LiteralPath $tempProxyEnv -Force -ErrorAction SilentlyContinue
 }
 
-# --- Interactive config: secure token/password prompts and no secret echo ---
+# --- Interactive config: secure username/password prompts and no secret echo ---
 $tempInteractivePath = Join-Path ([IO.Path]::GetTempPath()) ('hddt-interactive-' + [guid]::NewGuid().ToString('N') + '.env')
 $script:InteractiveAnswers = [System.Collections.Queue]::new()
-foreach ($answer in @('', 'interactive-user', 'interactive-pass', 'purchase', '01/09/2026', '30/09/2026', 'output', 'interactive.xlsx', 'true', 'false', 'false', 'false', 'true', 'http://proxy.example:8080', 'proxy-user', 'proxy-pass')) {
+foreach ($answer in @('interactive-user', 'interactive-pass', 'purchase', '01/09/2026', '30/09/2026', 'output', 'interactive.xlsx', 'true', 'false', 'false', 'false', 'true', 'http://proxy.example:8080', 'proxy-user', 'proxy-pass')) {
     $script:InteractiveAnswers.Enqueue([string]$answer)
 }
 $script:InteractivePrompts = New-Object System.Collections.Generic.List[string]
@@ -438,7 +444,7 @@ function Read-Host {
 }
 try {
     $interactiveConfig = Get-HddtConfig -EnvFile $tempInteractivePath -RepositoryRoot $root -Interactive
-    Assert-Equal '' $interactiveConfig.Token 'Interactive blank token selects account login'
+    Assert-Equal '' $interactiveConfig.Token 'Interactive config leaves runtime token empty'
     Assert-Equal 'interactive-user' $interactiveConfig.Username 'Interactive username is retained in memory'
     Assert-Equal 'interactive-pass' $interactiveConfig.Password 'Interactive password is retained in memory'
     Assert-Equal 'http://proxy.example:8080/' $interactiveConfig.ProxyUri.AbsoluteUri 'Interactive proxy URL is parsed'
@@ -634,7 +640,6 @@ $tempLoginEnv = Join-Path ([IO.Path]::GetTempPath()) ('hddt-test-' + [guid]::New
 $tempEmptyEnv = Join-Path ([IO.Path]::GetTempPath()) ('hddt-test-' + [guid]::NewGuid().ToString('N') + '.env')
 try {
     @'
-GDT_TOKEN=
 GDT_USERNAME=tester
 GDT_PASSWORD=secret-password
 INVOICE_DIRECTION=purchase
@@ -644,13 +649,12 @@ OUTPUT_DIR=output
 OUTPUT_XLSX=test.xlsx
 '@ | Set-Content -LiteralPath $tempLoginEnv -Encoding UTF8
     $loginModeConfig = Get-HddtConfig -EnvFile $tempLoginEnv -RepositoryRoot $root
-    Assert-Equal '' $loginModeConfig.Token 'Login mode leaves token empty'
+    Assert-Equal '' $loginModeConfig.Token 'Account config leaves runtime token empty'
     Assert-Equal 'tester' $loginModeConfig.Username 'Username parsed from .env'
     Assert-Equal 'secret-password' $loginModeConfig.Password 'Password parsed from .env'
     Assert-Equal $true $loginModeConfig.FetchRelated 'FETCH_RELATED defaults to true'
 
     @'
-GDT_TOKEN=
 INVOICE_DIRECTION=purchase
 FROM_DATE=01/09/2026
 TO_DATE=30/09/2026
@@ -660,7 +664,7 @@ OUTPUT_XLSX=test.xlsx
     $missingAuthRejected = $false
     try { Get-HddtConfig -EnvFile $tempEmptyEnv -RepositoryRoot $root | Out-Null }
     catch { $missingAuthRejected = $true }
-    Assert-Equal $true $missingAuthRejected 'Missing token and credentials is rejected'
+    Assert-Equal $true $missingAuthRejected 'Missing username and password is rejected'
 }
 finally {
     Remove-Item -LiteralPath $tempLoginEnv, $tempEmptyEnv -Force -ErrorAction SilentlyContinue
@@ -798,31 +802,6 @@ try {
 }
 finally {
     Set-Item Function:\Start-Sleep -Value $script:OriginalSleep
-    Remove-Item Function:\Invoke-WebRequest -ErrorAction SilentlyContinue
-}
-
-# Token dán tay không được tự gọi đăng nhập lại khi không có username/password.
-$script:UnauthorizedHits = 0
-function Invoke-WebRequest {
-    param($Uri, $Method, $Headers, $TimeoutSec, $UseBasicParsing, $WebSession, $ErrorAction)
-    $script:UnauthorizedHits++
-    $fakeResponse = New-Object HddtTest.FakeWebResponse (401)
-    $exception = New-Object System.Net.WebException('Simulated HTTP 401', $null, [System.Net.WebExceptionStatus]::ProtocolError, $fakeResponse)
-    $errorRecord = New-Object System.Management.Automation.ErrorRecord($exception, 'Http401', [System.Management.Automation.ErrorCategory]::InvalidOperation, $Uri)
-    throw $errorRecord
-}
-try {
-    $tokenOnlyConfig = [pscustomobject]@{
-        BaseUrl = 'https://hoadondientu.gdt.gov.vn/api'; Token = 'test-token'; Username = ''; Password = ''
-        RequestDelayMs = 0; AdaptiveThrottle = $false; MaxRetries = 0; HttpTimeoutSeconds = 30
-    }
-    $tokenOnlyRejected = $false
-    try { Invoke-GdtRequest -Config $tokenOnlyConfig -Uri ($tokenOnlyConfig.BaseUrl + '/invoices/query') | Out-Null }
-    catch { $tokenOnlyRejected = ($_.Exception.Message -match 'HTTP 401') }
-    Assert-Equal $true $tokenOnlyRejected 'Token-only 401 is surfaced to the caller'
-    Assert-Equal 1 $script:UnauthorizedHits 'Token-only 401 does not retry or re-login'
-}
-finally {
     Remove-Item Function:\Invoke-WebRequest -ErrorAction SilentlyContinue
 }
 
