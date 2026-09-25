@@ -93,7 +93,10 @@ function Get-ColumnWidths {
 }
 
 function Write-WorksheetXml {
-    param([string]$Path, [string[]]$Columns, $Rows, [int]$TableId)
+    param([string]$Path, [string[]]$Columns, $Rows, [int]$TableId, [string[]]$WrapColumns = @())
+
+    $wrapColumnSet = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+    foreach ($wrapColumn in $WrapColumns) { [void]$wrapColumnSet.Add($wrapColumn) }
 
     $rowItems = @($Rows)
     $lastColumn = Get-ExcelColumnName $Columns.Count
@@ -144,7 +147,8 @@ function Write-WorksheetXml {
                 $property = $rowItems[$row].PSObject.Properties[$Columns[$column]]
                 $value = if ($null -eq $property) { $null } else { $property.Value }
                 $reference = (Get-ExcelColumnName ($column + 1)) + $excelRow
-                Write-ExcelCell -Writer $writer -Reference $reference -Value $value
+                $style = if ($wrapColumnSet.Contains($Columns[$column])) { 2 } else { 0 }
+                Write-ExcelCell -Writer $writer -Reference $reference -Value $value -Style $style
             }
             $writer.WriteEndElement()
         }
@@ -226,13 +230,16 @@ function Export-InvoiceWorkbook {
     $parent = Split-Path -Parent $Path
     if (-not (Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
 
-    $summaryColumns = @('Direction','Source','XmlFile','InvoiceId','TemplateCode','InvoiceSeries','InvoiceNumber','InvoiceDate','Currency','ExchangeRate','SellerName','SellerTaxCode','SellerAddress','BuyerName','BuyerTaxCode','BuyerAddress','TaxAuthorityCode','AmountBeforeTax','TaxAmount','TotalAmount','TotalAmountText','ProviderTaxCode')
+    $summaryColumns = @('Direction','Source','XmlFile','InvoiceId','TemplateCode','InvoiceSeries','InvoiceNumber','InvoiceDate','Currency','ExchangeRate','SellerName','SellerTaxCode','SellerAddress','BuyerName','BuyerTaxCode','BuyerAddress','TaxAuthorityCode','AmountBeforeTax','TaxAmount','TotalAmount','TotalAmountText','ProviderTaxCode','RelatedChain','OriginalInvoiceType','OriginalTemplateCode','OriginalSeries','OriginalNumber','OriginalDate','OriginalNote','RelatedInfo')
     $detailColumns = @('Direction','Source','XmlFile','InvoiceSeries','InvoiceNumber','InvoiceDate','SellerTaxCode','BuyerTaxCode','LineNumber','Nature','ProductCode','Description','Unit','Quantity','UnitPrice','DiscountRate','DiscountAmount','TaxRate','AmountBeforeTax','TaxAmount','AmountWithTax')
     $errorColumns = @('Direction','Source','Invoice','Error')
+    # Chuỗi liên quan và thông tin liên quan có thể rất dài nên để xuống dòng
+    # (tương ứng WrapText = True trong modGhiExcel).
+    $summaryWrapColumns = @('RelatedChain', 'RelatedInfo')
     $sheets = @(
-        [pscustomobject]@{ Name='TongHop'; Columns=$summaryColumns; Rows=@($SummaryRows); TableName='tblTongHop' },
-        [pscustomobject]@{ Name='ChiTiet'; Columns=$detailColumns; Rows=@($DetailRows); TableName='tblChiTiet' },
-        [pscustomobject]@{ Name='Loi'; Columns=$errorColumns; Rows=@($ErrorRows); TableName='tblLoi' }
+        [pscustomobject]@{ Name='TongHop'; Columns=$summaryColumns; Rows=@($SummaryRows); TableName='tblTongHop'; WrapColumns=$summaryWrapColumns },
+        [pscustomobject]@{ Name='ChiTiet'; Columns=$detailColumns; Rows=@($DetailRows); TableName='tblChiTiet'; WrapColumns=@() },
+        [pscustomobject]@{ Name='Loi'; Columns=$errorColumns; Rows=@($ErrorRows); TableName='tblLoi'; WrapColumns=@() }
     )
 
     $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('hddt-xlsx-' + [guid]::NewGuid().ToString('N'))
@@ -246,7 +253,7 @@ function Export-InvoiceWorkbook {
         for ($index = 0; $index -lt $sheets.Count; $index++) {
             $sheetNumber = $index + 1
             $sheetPath = Join-Path $tempRoot ('xl\worksheets\sheet{0}.xml' -f $sheetNumber)
-            $tableResult = Write-WorksheetXml -Path $sheetPath -Columns $sheets[$index].Columns -Rows $sheets[$index].Rows -TableId $sheetNumber
+            $tableResult = Write-WorksheetXml -Path $sheetPath -Columns $sheets[$index].Columns -Rows $sheets[$index].Rows -TableId $sheetNumber -WrapColumns $sheets[$index].WrapColumns
             $tableResults += $tableResult
             if ($tableResult.HasTable) {
                 Write-TableXml -Path (Join-Path $tempRoot ('xl\tables\table{0}.xml' -f $sheetNumber)) -Id $sheetNumber -Name $sheets[$index].TableName -Reference $tableResult.Reference -Columns $sheets[$index].Columns
@@ -293,7 +300,7 @@ function Export-InvoiceWorkbook {
 
         $stylesXml = @"
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<styleSheet xmlns="$script:SpreadsheetNamespace"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF1F4E78"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>
+<styleSheet xmlns="$script:SpreadsheetNamespace"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF1F4E78"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>
 "@
         Write-TextFileUtf8NoBom -Path (Join-Path $tempRoot 'xl\styles.xml') -Content $stylesXml
 

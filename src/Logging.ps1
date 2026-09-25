@@ -4,6 +4,14 @@ $script:HddtLogFile = $null
 $script:HddtLogLevel = 'INFO'
 $script:HddtLogToFile = $false
 $script:HddtLevelRank = @{ DEBUG = 10; INFO = 20; WARN = 30; ERROR = 40 }
+$script:HddtStartedUtc = [datetime]::UtcNow
+
+# Thời gian tính từ lúc bắt đầu phiên, dùng để ghi thời lượng vào log INFO.
+function Get-HddtElapsedText {
+    $elapsed = [datetime]::UtcNow - $script:HddtStartedUtc
+    if ($elapsed.TotalSeconds -lt 60) { return ('{0:0.0}s' -f $elapsed.TotalSeconds) }
+    return ('{0:hh\:mm\:ss}' -f $elapsed)
+}
 
 function Initialize-HddtConsole {
     $utf8 = New-Object System.Text.UTF8Encoding($false)
@@ -27,6 +35,7 @@ function Start-HddtLogging {
 
     $script:HddtLogLevel = $Level.ToUpperInvariant()
     $script:HddtLogToFile = $ToFile
+    $script:HddtStartedUtc = [datetime]::UtcNow
     if ($ToFile) {
         New-Item -ItemType Directory -Path $Directory -Force | Out-Null
         $script:HddtLogFile = Join-Path $Directory ('{0}_{1}.log' -f $RunName, (Get-Date -Format 'yyyyMMdd_HHmmss'))

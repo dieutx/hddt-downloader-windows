@@ -78,10 +78,30 @@ function Get-HddtConfig {
     )
 
     $values = Read-DotEnvFile -Path $EnvFile
-    $token = (Get-RequiredEnvValue -Values $values -Name 'GDT_TOKEN').Trim()
-    $token = $token -replace '^(?i)Bearer\s+', ''
-    if ($token.IndexOf("`r") -ge 0 -or $token.IndexOf("`n") -ge 0 -or $token.Length -lt 20) {
-        throw 'GDT_TOKEN không hợp lệ.'
+
+    # Hai cách đăng nhập: dán sẵn GDT_TOKEN, hoặc điền GDT_USERNAME + GDT_PASSWORD
+    # để chương trình tự lấy CAPTCHA và đăng nhập (tương ứng frmDangNhap trong VBA).
+    $token = Get-EnvValue $values 'GDT_TOKEN' ''
+    $username = Get-EnvValue $values 'GDT_USERNAME' ''
+    $password = Get-EnvValue $values 'GDT_PASSWORD' ''
+    $hasUsername = -not [string]::IsNullOrWhiteSpace($username)
+    $hasPassword = -not [string]::IsNullOrWhiteSpace($password)
+    if ($hasUsername -xor $hasPassword) {
+        throw 'Phải điền cả GDT_USERNAME và GDT_PASSWORD (hoặc để trống cả hai).'
+    }
+    if (-not $hasUsername -and [string]::IsNullOrWhiteSpace($token)) {
+        throw 'Thiếu thông tin đăng nhập trong .env: điền GDT_TOKEN, hoặc cả GDT_USERNAME và GDT_PASSWORD.'
+    }
+    $useLogin = $hasUsername -and $hasPassword
+    if (-not $useLogin) {
+        $token = $token.Trim()
+        $token = $token -replace '^(?i)Bearer\s+', ''
+        if ($token.IndexOf("`r") -ge 0 -or $token.IndexOf("`n") -ge 0 -or $token.Length -lt 20) {
+            throw 'GDT_TOKEN không hợp lệ.'
+        }
+    }
+    else {
+        $token = ''
     }
 
     $direction = (Get-EnvValue -Values $values -Name 'INVOICE_DIRECTION' -Default 'both').ToLowerInvariant()
@@ -117,6 +137,7 @@ function Get-HddtConfig {
     $includeRegular = ConvertTo-EnvBoolean 'INCLUDE_REGULAR' (Get-EnvValue $values 'INCLUDE_REGULAR' 'true')
     $includeSco = ConvertTo-EnvBoolean 'INCLUDE_SCO' (Get-EnvValue $values 'INCLUDE_SCO' 'true')
     if (-not $includeRegular -and -not $includeSco) { throw 'Phải bật ít nhất một trong INCLUDE_REGULAR hoặc INCLUDE_SCO.' }
+    $fetchRelated = ConvertTo-EnvBoolean 'FETCH_RELATED' (Get-EnvValue $values 'FETCH_RELATED' 'true')
 
     $outputDirectory = Resolve-RepositoryPath $RepositoryRoot (Get-EnvValue $values 'OUTPUT_DIR' 'output')
     $outputName = Get-EnvValue $values 'OUTPUT_XLSX' 'HoaDonDienTu.xlsx'
@@ -126,6 +147,8 @@ function Get-HddtConfig {
 
     return [pscustomobject]@{
         Token = $token
+        Username = if ($useLogin) { $username.Trim() } else { '' }
+        Password = if ($useLogin) { $password } else { '' }
         BaseUrl = 'https://hoadondientu.gdt.gov.vn/api'
         Directions = $directions
         FromDate = $fromDate
@@ -140,6 +163,7 @@ function Get-HddtConfig {
         AdaptiveThrottle = ConvertTo-EnvBoolean 'ADAPTIVE_THROTTLE' (Get-EnvValue $values 'ADAPTIVE_THROTTLE' 'true')
         IncludeRegular = $includeRegular
         IncludeSco = $includeSco
+        FetchRelated = $fetchRelated
         RedownloadXml = ConvertTo-EnvBoolean 'REDOWNLOAD_XML' (Get-EnvValue $values 'REDOWNLOAD_XML' 'false')
         OverwriteOutput = ConvertTo-EnvBoolean 'OVERWRITE_OUTPUT' (Get-EnvValue $values 'OVERWRITE_OUTPUT' 'false')
         OutputDirectory = $outputDirectory

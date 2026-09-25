@@ -7,6 +7,7 @@ $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $root 'src\InvoiceApi.ps1')
 . (Join-Path $root 'src\XmlParser.ps1')
 . (Join-Path $root 'src\ExcelExporter.ps1')
+. (Join-Path $root 'src\Login.ps1')
 
 function Assert-Equal {
     param($Expected, $Actual, [string]$Message)
@@ -47,6 +48,26 @@ Assert-Equal ([datetime]'2026-10-01') $ranges[2].From 'Last monthly range start'
 Assert-Equal 5 (Get-RetryDelaySeconds -StatusCode 429 -Attempt 1) 'First 429 backoff'
 Assert-Equal 20 (Get-RetryDelaySeconds -StatusCode 429 -Attempt 3) 'Third 429 backoff'
 Assert-Equal 45 (Get-RetryDelaySeconds -StatusCode 429 -Attempt 1 -RetryAfterSeconds 45) 'Retry-After precedence'
+
+$originalGdtRequest = ${function:Invoke-GdtRequest}
+$script:IndexRequestCount = 0
+Set-Item Function:\Invoke-GdtRequest -Value {
+    param($Config, $Uri, $AsBytes)
+    $script:IndexRequestCount++
+    if ($script:IndexRequestCount -gt 2) { throw 'Pagination did not stop at repeated state.' }
+    return '{"datas":[{"nbmst":"test","khhdon":"C26TABC","shdon":"123","khmshdon":"1","tdlap":"2026-09-01"}],"state":"same-state"}'
+}
+try {
+    $indexConfig = [pscustomobject]@{
+        IncludeRegular = $true; IncludeSco = $false
+        FromDate = [datetime]'2026-09-01'; ToDate = [datetime]'2026-09-30'
+        BaseUrl = 'https://hoadondientu.gdt.gov.vn:30000'; PageSize = 50
+    }
+    $indexRows = @(Get-GdtInvoiceIndex -Config $indexConfig -Direction 'purchase')
+    Assert-Equal 2 $script:IndexRequestCount 'Repeated pagination state stops requests'
+    Assert-Equal 2 $indexRows.Count 'Rows from completed pages remain available'
+}
+finally { Set-Item Function:\Invoke-GdtRequest -Value $originalGdtRequest }
 
 $originalStatusResolver = $null
 function Invoke-WebRequest {
@@ -180,6 +201,261 @@ OUTPUT_XLSX=test.xlsx
 }
 finally {
     Remove-Item -LiteralPath $tempEnv -Force -ErrorAction SilentlyContinue
+}
+
+# --- Dieu khien dung an toan (Ctrl+C) ---
+Reset-HddtStopRequest
+Assert-Equal $false (Test-HddtStopRequested) 'Stop flag initially false'
+Set-HddtStopRequest
+Assert-Equal $true (Test-HddtStopRequested) 'Stop flag set'
+Reset-HddtStopRequest
+Assert-Equal $false (Test-HddtStopRequested) 'Stop flag reset'
+
+# --- Nhan dien CAPTCHA SVG (port tu modDetectCaptcha.bas) ---
+function New-TestCaptchaPath {
+    param([int]$KeywordIndex, [double]$Position)
+    $keyword = $script:CaptchaKeywords[$KeywordIndex]
+    $commands = -join $keyword.ToCharArray()
+    $builder = New-Object Text.StringBuilder
+    foreach ($command in $commands.ToCharArray()) {
+        switch ($command) {
+            'M' { [void]$builder.Append(('M{0} 0 ' -f $Position.ToString([Globalization.CultureInfo]::InvariantCulture))) }
+            'Q' { [void]$builder.Append('Q1 1 2 2 ') }
+            'Z' { [void]$builder.Append('Z ') }
+        }
+    }
+    return $builder.ToString().TrimEnd()
+}
+
+function New-TestCaptchaResponse {
+    param([int[]]$KeywordIndexes, [double[]]$Positions)
+    $paths = @()
+    for ($index = 0; $index -lt $KeywordIndexes.Count; $index++) {
+        $paths += '<path d="{0}" />' -f (New-TestCaptchaPath -KeywordIndex $KeywordIndexes[$index] -Position $Positions[$index])
+    }
+    $svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 40">{0}</svg>' -f ($paths -join '')
+    return (@{ key = 'captcha-key-1'; content = $svg } | ConvertTo-Json -Compress)
+}
+
+$orderedResponse = New-TestCaptchaResponse -KeywordIndexes @(19, 4, 2) -Positions @(30, 10, 20)
+$orderedPayload = $orderedResponse | ConvertFrom-Json
+Assert-Equal 'ECT' (ConvertFrom-SvgCaptcha -Text (Get-JsonTextValue $orderedPayload 'content')) 'CAPTCHA decodes and sorts by coordinate'
+
+for ($keywordIndex = 0; $keywordIndex -lt $script:CaptchaKeywords.Count; $keywordIndex++) {
+    if ([string]::IsNullOrEmpty($script:CaptchaKeywords[$keywordIndex])) { continue }
+    $expectedCharacter = if ($keywordIndex -le 26) { [string][char]($keywordIndex + 65) } else { [string]($keywordIndex - 26) }
+    $singlePayload = (New-TestCaptchaResponse -KeywordIndexes @($keywordIndex) -Positions @(7)) | ConvertFrom-Json
+    $decoded = ConvertFrom-SvgCaptcha -Text (Get-JsonTextValue $singlePayload 'content')
+    Assert-Equal $expectedCharacter $decoded ('CAPTCHA keyword round-trip at index ' + $keywordIndex)
+}
+Assert-Equal '' (ConvertFrom-SvgCaptcha -Text '<svg><path d="M0 0 Z" /></svg>') 'Unknown path keyword is ignored'
+
+# --- Dang nhap voi CAPTCHA tu dong ---
+$originalLoginRequest = ${function:Invoke-GdtRequest}
+$script:LoginCalls = @()
+$script:LoginAuthBodies = @()
+Set-Item Function:\Invoke-GdtRequest -Value {
+    param($Config, $Uri, [string]$Method, [string]$Body, [switch]$SkipAuthorization, [hashtable]$ExtraHeaders, [switch]$AsBytes, [string]$ContentType)
+    $script:LoginCalls += [pscustomobject]@{ Uri = $Uri; Method = $Method; Body = $Body }
+    if ($Uri -like '*/captcha') {
+        return (New-TestCaptchaResponse -KeywordIndexes @(19, 4, 2) -Positions @(30, 10, 20))
+    }
+    if ($Uri -like '*/authenticate') {
+        $script:LoginAuthBodies += $Body
+        if ($script:LoginAuthBodies.Count -eq 1) { return '{"message":"Mã CAPTCHA không đúng."}' }
+        return '{"token":"jwt-token-123"}'
+    }
+    throw ('Unexpected URI in login test: ' + $Uri)
+}
+try {
+    $loginConfig = [pscustomobject]@{
+        BaseUrl = 'https://hoadondientu.gdt.gov.vn/api'
+        Username = 'tester'
+        Password = 'secret-password'
+        Token = ''
+        RequestDelayMs = 0
+        AdaptiveThrottle = $false
+        MaxRetries = 0
+        HttpTimeoutSeconds = 30
+    }
+    Reset-HddtStopRequest
+    $loginToken = Invoke-GdtLogin -Config $loginConfig
+    Assert-Equal 'jwt-token-123' $loginToken 'Login returns token'
+    Assert-Equal 4 $script:LoginCalls.Count 'Login retries once after captcha error'
+    $authPayload = $script:LoginAuthBodies[-1] | ConvertFrom-Json
+    Assert-Equal 'tester' $authPayload.username 'Login sends username'
+    Assert-Equal 'secret-password' $authPayload.password 'Login sends password'
+    Assert-Equal 'captcha-key-1' $authPayload.ckey 'Login sends captcha key'
+    Assert-Equal 'ECT' $authPayload.cvalue 'Login sends decoded captcha'
+}
+finally { Set-Item Function:\Invoke-GdtRequest -Value $originalLoginRequest }
+
+# --- Chuoi hoa don lien quan (relative/related) ---
+$originalRelationRequest = ${function:Invoke-GdtRequest}
+$script:RelationUris = @()
+$script:RelationFailRelative = $false
+$script:RelativeResponse = '[{"khmshdon":"1","khhdon":"C26TABC","shdon":"100","khmshdgoc":"1","khhdgoc":"C26TOLD","shdgoc":"50","tthai":2}]'
+$script:RelatedResponse = '{"mtthdtbssrs":[{"ten":"Thông báo hóa đơn","ngay":"2026-09-02T00:00:00","ldo":"sai sót kinh doanh","loai":"3","kqtnhan":"1"}]}'
+Set-Item Function:\Invoke-GdtRequest -Value {
+    param($Config, $Uri, [string]$Method, [string]$Body, [switch]$SkipAuthorization, [hashtable]$ExtraHeaders, [switch]$AsBytes, [string]$ContentType)
+    $script:RelationUris += $Uri
+    if ($Uri -like '*/invoices/relative?*') {
+        if ($script:RelationFailRelative) { throw 'Yeu cau GDT that bai (HTTP 500).' }
+        return $script:RelativeResponse
+    }
+    if ($Uri -like '*/invoices/related?*') { return $script:RelatedResponse }
+    throw ('Unexpected URI in relation test: ' + $Uri)
+}
+try {
+    $relationConfig = [pscustomobject]@{
+        BaseUrl = 'https://hoadondientu.gdt.gov.vn/api'
+        Token = 'test-token'
+        RequestDelayMs = 0
+        AdaptiveThrottle = $false
+        MaxRetries = 0
+        HttpTimeoutSeconds = 30
+    }
+    $relationInvoice = [pscustomobject]@{
+        Direction = 'purchase'; Source = 'query'
+        SellerTaxCode = '0123456789'; InvoiceSeries = 'C26TABC'; InvoiceNumber = '123'; InvoiceTemplate = '1'
+        Status = 3; RelatedChain = 'list-chain'; OriginalInvoiceType = '02'
+        OriginalTemplateCode = '1'; OriginalSeries = 'C26TABC'; OriginalNumber = '100'
+        OriginalDate = '01/09/2026'; OriginalNote = 'ghi chu'; RelatedInfo = ''
+    }
+
+    $relationResult = Get-GdtInvoiceRelation -Config $relationConfig -Invoice $relationInvoice
+    Assert-Equal 2 $script:RelationUris.Count 'Status 3 calls relative then related'
+    $expectedChain = "1. Hóa đơn có liên quan | 1 | C26TABC | 100 | Thay thế cho hóa đơn có ký hiệu mẫu số 1, ký hiệu hóa đơn C26TOLD, số hóa đơn 50`r`n2. Hóa đơn đang tra cứu | 1 | C26TABC | 123"
+    Assert-Equal $expectedChain $relationResult.RelatedChain 'Relative chain text'
+    Assert-Equal 'Hóa đơn có Thông báo hóa đơn ngày 02/09/2026. Tính chất Thay thế, lý do sai sót kinh doanh. Cơ quan thuế tiếp nhận.' $relationResult.RelatedInfo 'Related notice summary'
+    Assert-Equal '02' $relationResult.OriginalInvoiceType 'Original invoice type copied'
+
+    $script:RelationUris = @()
+    $statusSixInvoice = [pscustomobject]@{
+        Direction = 'purchase'; Source = 'query'
+        SellerTaxCode = '0123456789'; InvoiceSeries = 'C26TABC'; InvoiceNumber = '124'; InvoiceTemplate = '1'
+        Status = 6; RelatedChain = 'list-chain'; OriginalInvoiceType = ''
+        OriginalTemplateCode = ''; OriginalSeries = ''; OriginalNumber = ''; OriginalDate = ''; OriginalNote = ''
+        RelatedInfo = ''
+    }
+    $statusSixResult = Get-GdtInvoiceRelation -Config $relationConfig -Invoice $statusSixInvoice
+    Assert-Equal 1 $script:RelationUris.Count 'Status 6 calls related only'
+    Assert-Equal 'Không có thông tin hiển thị' $statusSixResult.RelatedChain 'Status 6 chain text'
+
+    $script:RelationUris = @()
+    $statusOneInvoice = [pscustomobject]@{
+        Direction = 'purchase'; Source = 'query'
+        SellerTaxCode = '0123456789'; InvoiceSeries = 'C26TABC'; InvoiceNumber = '125'; InvoiceTemplate = '1'
+        Status = 1; RelatedChain = ''; OriginalInvoiceType = ''
+        OriginalTemplateCode = ''; OriginalSeries = ''; OriginalNumber = ''; OriginalDate = ''; OriginalNote = ''
+        RelatedInfo = ''
+    }
+    Assert-Equal $null (Get-GdtInvoiceRelation -Config $relationConfig -Invoice $statusOneInvoice) 'Status 1 has no relation data'
+    Assert-Equal 0 $script:RelationUris.Count 'Status 1 makes no relation request'
+
+    $listOnlyResult = Get-GdtInvoiceRelation -Config $relationConfig -Invoice $relationInvoice -ListOnly
+    Assert-Equal 0 $script:RelationUris.Count 'ListOnly makes no extra relation request'
+    Assert-Equal 'list-chain' $listOnlyResult.RelatedChain 'ListOnly keeps list chain'
+    Assert-Equal '' $listOnlyResult.RelatedInfo 'ListOnly has no related info'
+
+    $script:RelationUris = @()
+    $script:RelationFailRelative = $true
+    $failedResult = Get-GdtInvoiceRelation -Config $relationConfig -Invoice $relationInvoice
+    Assert-Equal 2 $script:RelationUris.Count 'Relative failure still calls related'
+    Assert-Equal $true ($failedResult.RelatedChain.StartsWith('Lỗi: Không thể lấy chuỗi hóa đơn liên quan')) 'Relative failure writes error into chain cell'
+    Assert-Equal $true ($failedResult.RelatedInfo.StartsWith('Hóa đơn có')) 'Related still succeeds after relative failure'
+    $script:RelationFailRelative = $false
+}
+finally {
+    Set-Item Function:\Invoke-GdtRequest -Value $originalRelationRequest
+    Reset-HddtStopRequest
+}
+
+# --- Cac ham dinh dang lien quan ---
+Assert-Equal 'Không có thông tin liên quan' (ConvertTo-RelatedInformationText -ResponseText '[]') 'Empty related response'
+Assert-Equal 'Không có thông tin liên quan' (ConvertTo-RelatedInformationText -ResponseText '{"mtthdtbssrs":[]}') 'Empty notice container'
+$rawRelated = ConvertTo-RelatedInformationText -ResponseText '{"foo":1}'
+Assert-Equal $true ($rawRelated -match '"foo"') 'Non notice response keeps JSON text'
+Assert-Equal 'Điều chỉnh' (Get-RelatedNoticeNature '2') 'Notice nature maps to Vietnamese'
+Assert-Equal '02/09/2026' (ConvertTo-RelatedDate '2026-09-02T00:00:00') 'Related date formats as dd/MM/yyyy'
+Assert-Equal $true ((Get-GdtRelationActionHeader -EndpointName 'relative' -Source 'query' -Direction 'purchase').StartsWith('Xem%20h%C3%B3a%20%C4%91%C6%A1n%20li%C3%AAn%20quan%20(')) 'Relative action header'
+Assert-Equal ('https://hoadondientu.gdt.gov.vn/api/query/invoices/related?nbmst=0123456789&khmshdon=1&khhdon=C26TABC&shdon=123') (Get-GdtRelationUri -Config $relationConfig -Invoice $relationInvoice -EndpointName 'related') 'Related endpoint uri'
+
+# --- Cau hinh dang nhap ---
+$tempLoginEnv = Join-Path ([IO.Path]::GetTempPath()) ('hddt-test-' + [guid]::NewGuid().ToString('N') + '.env')
+$tempEmptyEnv = Join-Path ([IO.Path]::GetTempPath()) ('hddt-test-' + [guid]::NewGuid().ToString('N') + '.env')
+try {
+    @'
+GDT_TOKEN=
+GDT_USERNAME=tester
+GDT_PASSWORD=secret-password
+INVOICE_DIRECTION=purchase
+FROM_DATE=01/09/2026
+TO_DATE=30/09/2026
+OUTPUT_DIR=output
+OUTPUT_XLSX=test.xlsx
+'@ | Set-Content -LiteralPath $tempLoginEnv -Encoding UTF8
+    $loginModeConfig = Get-HddtConfig -EnvFile $tempLoginEnv -RepositoryRoot $root
+    Assert-Equal '' $loginModeConfig.Token 'Login mode leaves token empty'
+    Assert-Equal 'tester' $loginModeConfig.Username 'Username parsed from .env'
+    Assert-Equal 'secret-password' $loginModeConfig.Password 'Password parsed from .env'
+    Assert-Equal $true $loginModeConfig.FetchRelated 'FETCH_RELATED defaults to true'
+
+    @'
+GDT_TOKEN=
+INVOICE_DIRECTION=purchase
+FROM_DATE=01/09/2026
+TO_DATE=30/09/2026
+OUTPUT_DIR=output
+OUTPUT_XLSX=test.xlsx
+'@ | Set-Content -LiteralPath $tempEmptyEnv -Encoding UTF8
+    $missingAuthRejected = $false
+    try { Get-HddtConfig -EnvFile $tempEmptyEnv -RepositoryRoot $root | Out-Null }
+    catch { $missingAuthRejected = $true }
+    Assert-Equal $true $missingAuthRejected 'Missing token and credentials is rejected'
+}
+finally {
+    Remove-Item -LiteralPath $tempLoginEnv, $tempEmptyEnv -Force -ErrorAction SilentlyContinue
+}
+
+# --- Cot chuoi lien quan va style xuong dong ---
+$tempWrapXlsx = Join-Path ([IO.Path]::GetTempPath()) ('hddt-test-' + [guid]::NewGuid().ToString('N') + '.xlsx')
+try {
+    $wrapSummary = [pscustomobject]@{
+        Direction = 'purchase'; Source = 'query'; InvoiceSeries = 'C26TABC'; InvoiceNumber = '123'
+        RelatedChain = "dong 1`r`ndong 2"; RelatedInfo = 'thong tin lien quan'
+    }
+    Export-InvoiceWorkbook -Path $tempWrapXlsx -SummaryRows @($wrapSummary) -DetailRows @() -ErrorRows @() -Overwrite
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $wrapZip = [IO.Compression.ZipFile]::OpenRead($tempWrapXlsx)
+    try {
+        $wrapStylesEntry = $wrapZip.GetEntry('xl/styles.xml')
+        $wrapStylesReader = New-Object IO.StreamReader($wrapStylesEntry.Open())
+        try { $wrapStylesText = $wrapStylesReader.ReadToEnd() } finally { $wrapStylesReader.Dispose() }
+        Assert-Equal $true ($wrapStylesText -match '<cellXfs count="3">') 'Wrap style adds third cell format'
+        Assert-Equal $true ($wrapStylesText -match 'wrapText="1"') 'Wrap style enables text wrapping'
+
+        $wrapSheetEntry = $wrapZip.GetEntry('xl/worksheets/sheet1.xml')
+        $wrapSheetReader = New-Object IO.StreamReader($wrapSheetEntry.Open())
+        try { $wrapSheetText = $wrapSheetReader.ReadToEnd() } finally { $wrapSheetReader.Dispose() }
+        Assert-Equal $true ($wrapSheetText -match '<c r="W2" s="2"') 'RelatedChain cell uses wrap style'
+        Assert-Equal $true ($wrapSheetText -match '<c r="AD2" s="2"') 'RelatedInfo cell uses wrap style'
+        Assert-Equal $true ($wrapSheetText -match '<c r="A2" t="inlineStr"') 'Normal cell keeps default style'
+    }
+    finally { $wrapZip.Dispose() }
+}
+finally {
+    Remove-Item -LiteralPath $tempWrapXlsx -Force -ErrorAction SilentlyContinue
+}
+
+# --- Kiem tra cu phap toan bo script (bat loi encoding/thieu dau) ---
+$scriptPaths = @((Join-Path $root 'Invoke-Hddt.ps1'), (Join-Path $root 'Parse-LocalXml.ps1'))
+$scriptPaths += @(Get-ChildItem -LiteralPath (Join-Path $root 'src') -Filter '*.ps1' | ForEach-Object { $_.FullName })
+foreach ($scriptPath in $scriptPaths) {
+    $tokens = $null
+    $parseErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors) | Out-Null
+    Assert-Equal 0 (@($parseErrors).Count) ('No parse error in ' + (Split-Path -Leaf $scriptPath))
 }
 
 Write-Host 'All tests passed.' -ForegroundColor Green

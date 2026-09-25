@@ -8,6 +8,56 @@ $script:AdaptiveBaseDelayMs = $null
 $script:SuccessfulRequestStreak = 0
 $script:GdtWebSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession
 
+# Điều khiển dừng an toàn (tương ứng GdtStopRequested trong VBA).
+# Ctrl+C lần 1 yêu cầu dừng sau request hiện tại, lần 2 dừng ngay.
+# Dữ liệu đã tải trước khi dừng vẫn được xuất ra Excel.
+$script:HddtStopRequested = $false
+$script:LastGdtRequestAttempts = 0
+$script:LastGdtStatusCode = 0
+
+function Reset-HddtStopRequest {
+    $script:HddtStopRequested = $false
+}
+
+function Set-HddtStopRequest {
+    $script:HddtStopRequested = $true
+}
+
+function Test-HddtStopRequested {
+    return [bool]$script:HddtStopRequested
+}
+
+# Số lần thử và HTTP status của request GDT gần nhất, dùng để tạo thông báo
+# lỗi cho chuỗi hóa đơn liên quan (tương ứng LastGdtAttempts/LastGdtStatus trong VBA).
+function Get-GdtLastRequestAttempts {
+    return [int]$script:LastGdtRequestAttempts
+}
+
+function Get-GdtLastStatusCode {
+    return [int]$script:LastGdtStatusCode
+}
+
+function Register-HddtStopHandler {
+    try {
+        $null = [Console]::add_CancelKeyPress({
+            param($sender, $eventArgs)
+            if ($script:HddtStopRequested) {
+                # Nhấn lần 2: cho phép PowerShell dừng ngay (không xuất Excel).
+                $eventArgs.Cancel = $false
+                return
+            }
+            $script:HddtStopRequested = $true
+            $eventArgs.Cancel = $true
+            try {
+                Write-Host ''
+                Write-Host '[STOP] Đã yêu cầu dừng (Ctrl+C); chờ request hiện tại hoàn tất. Nhấn Ctrl+C lần nữa để dừng ngay.' -ForegroundColor Yellow
+            } catch { }
+        })
+        return $true
+    }
+    catch { return $false }
+}
+
 function Test-AdaptiveThrottleEnabled {
     param([Parameter(Mandatory = $true)]$Config)
     $property = $Config.PSObject.Properties['AdaptiveThrottle']
@@ -32,7 +82,7 @@ function Register-GdtRateLimit {
     $currentDelay = Get-GdtRequestDelayMs $Config
     $script:AdaptiveRequestDelayMs = [Math]::Min(10000, [Math]::Max(1000, $currentDelay * 2))
     $script:SuccessfulRequestStreak = 0
-    Write-HddtLog WARN ('GDT đang giới hạn tốc độ; tự tăng giãn cách lên {0} ms/request.' -f $script:AdaptiveRequestDelayMs)
+    Write-HddtLog WARN ('[MẠNG] GDT giới hạn tốc độ; tự tăng giãn cách lên {0} ms/request.' -f $script:AdaptiveRequestDelayMs)
 }
 
 function Register-GdtRequestSuccess {
@@ -44,7 +94,7 @@ function Register-GdtRequestSuccess {
     if ($script:SuccessfulRequestStreak -ge 20) {
         $script:AdaptiveRequestDelayMs = [Math]::Max([int]$Config.RequestDelayMs, [int][Math]::Floor($currentDelay * 0.85))
         $script:SuccessfulRequestStreak = 0
-        Write-HddtLog INFO ('Kết nối ổn định; giảm giãn cách xuống {0} ms/request.' -f $script:AdaptiveRequestDelayMs)
+        Write-HddtLog INFO ('[MẠNG] Kết nối ổn định; giảm giãn cách xuống {0} ms/request.' -f $script:AdaptiveRequestDelayMs)
     }
 }
 
@@ -111,7 +161,12 @@ function Invoke-GdtRequest {
     param(
         [Parameter(Mandatory = $true)]$Config,
         [Parameter(Mandatory = $true)][string]$Uri,
-        [switch]$AsBytes
+        [switch]$AsBytes,
+        [ValidateSet('Get', 'Post')][string]$Method = 'Get',
+        [string]$Body,
+        [string]$ContentType = 'application/json',
+        [hashtable]$ExtraHeaders,
+        [switch]$SkipAuthorization
     )
 
     if (-not $Uri.StartsWith($Config.BaseUrl + '/', [StringComparison]::OrdinalIgnoreCase)) {
@@ -120,27 +175,41 @@ function Invoke-GdtRequest {
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $attempt = 0
+    $script:LastGdtRequestAttempts = 0
+    $script:LastGdtStatusCode = 0
     while ($true) {
+        if (Test-HddtStopRequested) { throw 'Đã dừng theo yêu cầu; không gửi request mới.' }
         try {
             Wait-GdtRequestSlot -Config $Config
             $script:LastGdtRequestUtc = [datetime]::UtcNow
+            $script:LastGdtRequestAttempts = $attempt + 1
             $requestWatch = [Diagnostics.Stopwatch]::StartNew()
             $headers = @{
-                Authorization = 'Bearer ' + $Config.Token
                 Accept = if ($AsBytes) { 'application/zip, application/xml, */*' } else { 'application/json' }
                 'Request-Id' = [guid]::NewGuid().ToString()
                 'User-Agent' = 'HDDT-Windows-PowerShell/1.0'
             }
+            $tokenProperty = $Config.PSObject.Properties['Token']
+            if (-not $SkipAuthorization -and $null -ne $tokenProperty -and -not [string]::IsNullOrWhiteSpace([string]$tokenProperty.Value)) {
+                $headers['Authorization'] = 'Bearer ' + [string]$tokenProperty.Value
+            }
+            if ($null -ne $ExtraHeaders) {
+                foreach ($headerName in $ExtraHeaders.Keys) { $headers[$headerName] = $ExtraHeaders[$headerName] }
+            }
             $parameters = @{
                 Uri = $Uri
-                Method = 'Get'
+                Method = $Method
                 Headers = $headers
                 TimeoutSec = $Config.HttpTimeoutSeconds
                 UseBasicParsing = $true
                 WebSession = $script:GdtWebSession
                 ErrorAction = 'Stop'
             }
-            Write-HddtLog DEBUG ('HTTP GET {0}' -f $Uri)
+            if ($null -ne $Body) {
+                $parameters['Body'] = $Body
+                $parameters['ContentType'] = $ContentType
+            }
+            Write-HddtLog DEBUG ('HTTP {0} {1}' -f $Method.ToUpperInvariant(), $Uri)
             $response = Invoke-WebRequest @parameters
             $requestWatch.Stop()
             Register-GdtRequestSuccess $Config
@@ -171,6 +240,7 @@ function Invoke-GdtRequest {
         }
         catch {
             $status = Get-HttpStatusCode $_
+            $script:LastGdtStatusCode = $status
             if ($status -eq 401 -or $status -eq 403) {
                 throw "Token hết hạn, không hợp lệ hoặc không có quyền (HTTP $status)."
             }
@@ -193,7 +263,8 @@ function Invoke-GdtRequest {
             $attempt++
             $retryAfterSeconds = Get-HttpRetryAfterSeconds $_
             $waitSeconds = Get-RetryDelaySeconds -StatusCode $status -Attempt $attempt -RetryAfterSeconds $retryAfterSeconds
-            Write-HddtLog WARN ("HTTP {0}; thử lại {1}/{2} sau {3}s." -f $status, $attempt, $Config.MaxRetries, $waitSeconds)
+            Write-HddtLog WARN ("[MẠNG] HTTP {0}; thử lại {1}/{2} sau {3}s." -f $status, $attempt, $Config.MaxRetries, $waitSeconds)
+            if (Test-HddtStopRequested) { throw 'Đã dừng theo yêu cầu; ngưng thử lại.' }
             Start-Sleep -Seconds $waitSeconds
         }
     }

@@ -46,14 +46,14 @@ try {
     New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
     $logFile = Start-HddtLogging -Directory (Join-Path $outputDirectory 'logs') -Level $logLevel -ToFile $logToFile -RunName 'parse-local'
     $loggingStarted = $true
-    Write-HddtLog INFO ('Bắt đầu parse XML local: {0}' -f $sourceDirectory)
+    Write-HddtLog INFO ('[PARSE XML] Bắt đầu: {0}' -f $sourceDirectory)
     $directionText = if ($direction -eq 'auto') { 'tự nhận diện theo thư mục/tên file' } else { $direction }
-    Write-HddtLog INFO ('Loại: {0} | đầu ra: {1}' -f $directionText, $outputWorkbook)
-    if ($logToFile) { Write-HddtLog INFO ('Nhật ký: {0}' -f $logFile) }
+    Write-HddtLog INFO ('[PARSE XML] Loại: {0} | đầu ra: {1}' -f $directionText, $outputWorkbook)
+    if ($logToFile) { Write-HddtLog INFO ('[PARSE XML] Nhật ký: {0}' -f $logFile) }
 
     $xmlFiles = @(Get-ChildItem -LiteralPath $sourceDirectory -Recurse -File -Filter '*.xml' | Sort-Object FullName)
     if ($xmlFiles.Count -eq 0) { throw "Thư mục không có file XML: $sourceDirectory" }
-    Write-HddtLog INFO ('Tìm thấy {0} file XML.' -f $xmlFiles.Count)
+    Write-HddtLog INFO ('[PARSE XML] Tìm thấy {0} file XML.' -f $xmlFiles.Count)
 
     $summaryRows = New-Object System.Collections.Generic.List[object]
     $detailRows = New-Object System.Collections.Generic.List[object]
@@ -71,7 +71,7 @@ try {
             foreach ($detail in $parsed.Details) { $detailRows.Add($detail) }
             if (($current % $progressEvery) -eq 0 -or $current -eq $xmlFiles.Count) {
                 $percent = [Math]::Floor(($current * 100.0) / $xmlFiles.Count)
-                Write-HddtLog INFO ('[{0}/{1} | {2}%] OK {3} | dòng chi tiết +{4}' -f $current, $xmlFiles.Count, $percent, $file.Name, @($parsed.Details).Count)
+                Write-HddtLog INFO ('[PARSE XML] [{0}/{1} | {2}%] {3} | +{4} dòng chi tiết' -f $current, $xmlFiles.Count, $percent, $file.Name, @($parsed.Details).Count)
             }
         }
         catch {
@@ -81,15 +81,15 @@ try {
                 Invoice = $file.FullName
                 Error = $_.Exception.Message
             })
-            Write-HddtLog WARN ('[{0}/{1}] Không parse được {2}: {3}' -f $current, $xmlFiles.Count, $file.Name, $_.Exception.Message)
+            Write-HddtLog WARN ('[PARSE XML] Không parse được {2} ({0}/{1}): {3}' -f $current, $xmlFiles.Count, $file.Name, $_.Exception.Message)
         }
     }
 
-    Write-HddtLog INFO ('Đang tạo workbook: tổng hợp {0}, chi tiết {1}, lỗi {2}.' -f $summaryRows.Count, $detailRows.Count, $errorRows.Count)
+    Write-HddtLog INFO ('[XUẤT FILE] Tạo workbook: tổng hợp {0} | chi tiết {1} | lỗi {2}.' -f $summaryRows.Count, $detailRows.Count, $errorRows.Count)
     Export-InvoiceWorkbook -Path $outputWorkbook -SummaryRows ($summaryRows.ToArray()) -DetailRows ($detailRows.ToArray()) -ErrorRows ($errorRows.ToArray()) -Overwrite:$overwrite
     $stopwatch.Stop()
-    Write-HddtLog INFO ('Hoàn tất sau {0:hh\:mm\:ss}: {1}' -f $stopwatch.Elapsed, $outputWorkbook)
-    Write-HddtLog INFO ('XML {0} | tổng hợp {1} | chi tiết {2} | lỗi {3}.' -f $xmlFiles.Count, $summaryRows.Count, $detailRows.Count, $errorRows.Count)
+    Write-HddtLog INFO ('[KẾT QUẢ] Hoàn tất | chạy {0:hh\:mm\:ss} | file: {1}' -f $stopwatch.Elapsed, $outputWorkbook)
+    Write-HddtLog INFO ('[KẾT QUẢ] XML {0} | tổng hợp {1} | chi tiết {2} | lỗi {3}.' -f $xmlFiles.Count, $summaryRows.Count, $detailRows.Count, $errorRows.Count)
     exit 0
 }
 catch {
