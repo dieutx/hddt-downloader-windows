@@ -50,10 +50,16 @@ function ConvertFrom-XmlNumber {
     param([string]$Value)
     if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
     $number = 0.0
-    if ([double]::TryParse($Value, [Globalization.NumberStyles]::Any, [Globalization.CultureInfo]::InvariantCulture, [ref]$number)) {
+    $text = $Value.Trim()
+    if (($text -match ',\d{1,2}$' -and $text -notmatch '\.') -or ($text -match ',\d{1,2}$' -and $text -match '\.')) {
+        if ([double]::TryParse($text, [Globalization.NumberStyles]::Any, [Globalization.CultureInfo]::GetCultureInfo('vi-VN'), [ref]$number)) {
+            return $number
+        }
+    }
+    if ([double]::TryParse($text, [Globalization.NumberStyles]::Any, [Globalization.CultureInfo]::InvariantCulture, [ref]$number)) {
         return $number
     }
-    if ([double]::TryParse($Value, [Globalization.NumberStyles]::Any, [Globalization.CultureInfo]::GetCultureInfo('vi-VN'), [ref]$number)) {
+    if ([double]::TryParse($text, [Globalization.NumberStyles]::Any, [Globalization.CultureInfo]::GetCultureInfo('vi-VN'), [ref]$number)) {
         return $number
     }
     return $Value
@@ -81,6 +87,22 @@ function Get-AdditionalXmlValue {
         }
     }
     return ''
+}
+
+# Preserve the ordered TTin/TTKhac entries used by the VBA lookup logic.
+# The exporter decides which field names are lookup codes; keeping the raw
+# entries here avoids losing provider-specific fields during XML parsing.
+function Get-XmlAdditionalFields {
+    param($Node)
+    $result = New-Object System.Collections.Generic.List[object]
+    if ($null -eq $Node) { return $result.ToArray() }
+    foreach ($info in $Node.SelectNodes(".//*[local-name()='TTin']")) {
+        $result.Add([pscustomobject]@{
+            TTruong = Get-XmlText $info "./*[local-name()='TTruong']"
+            DLieu = Get-XmlText $info "./*[local-name()='DLieu']"
+        })
+    }
+    return $result.ToArray()
 }
 
 function ConvertFrom-InvoiceXml {
@@ -115,30 +137,40 @@ function ConvertFrom-InvoiceXml {
     $seller = $content.SelectSingleNode("./*[local-name()='NBan']")
     $buyer = $content.SelectSingleNode("./*[local-name()='NMua']")
     $totals = $content.SelectSingleNode("./*[local-name()='TToan']")
+    $invoiceAdditionalFields = @(Get-XmlAdditionalFields $data.SelectSingleNode("./*[local-name()='TTKhac']"))
+    $generalAdditionalFields = @(Get-XmlAdditionalFields $general.SelectSingleNode("./*[local-name()='TTKhac']"))
+    $sellerSigningTime = ConvertFrom-XmlDate (Get-XmlText $invoice ".//*[local-name()='DSCKS']/*[local-name()='NBan']//*[local-name()='SigningTime']")
+    $taxAuthoritySigningTime = ConvertFrom-XmlDate (Get-XmlText $invoice ".//*[local-name()='DSCKS']/*[local-name()='CQT']//*[local-name()='SigningTime']")
 
     $summary = [pscustomobject]@{
         Direction = $Direction
         Source = $Source
         XmlFile = [IO.Path]::GetFileName($Path)
         InvoiceId = Get-XmlAttribute $data 'Id'
+        InvoiceType = Get-XmlAttribute $invoice 'LoaiHD'
         TemplateCode = Get-XmlText $general "./*[local-name()='KHMSHDon']"
         InvoiceSeries = Get-XmlText $general "./*[local-name()='KHHDon']"
         InvoiceNumber = Get-XmlText $general "./*[local-name()='SHDon']"
+        InvoiceDateText = Get-XmlText $general "./*[local-name()='NLap']"
         InvoiceDate = ConvertFrom-XmlDate (Get-XmlText $general "./*[local-name()='NLap']")
         Currency = Get-XmlText $general "./*[local-name()='DVTTe']"
         ExchangeRate = ConvertFrom-XmlNumber (Get-XmlText $general "./*[local-name()='TGia']")
         SellerName = Get-XmlText $seller "./*[local-name()='Ten']"
         SellerTaxCode = Get-XmlText $seller "./*[local-name()='MST']"
         SellerAddress = Get-XmlText $seller "./*[local-name()='DChi']"
+        SellerSigningTime = $sellerSigningTime
         BuyerName = Get-XmlText $buyer "./*[local-name()='Ten']"
         BuyerTaxCode = Get-XmlText $buyer "./*[local-name()='MST']"
         BuyerAddress = Get-XmlText $buyer "./*[local-name()='DChi']"
         TaxAuthorityCode = Get-XmlText $invoice ".//*[local-name()='MCCQT']"
+        TaxAuthoritySigningTime = $taxAuthoritySigningTime
         AmountBeforeTax = ConvertFrom-XmlNumber (Get-XmlText $totals "./*[local-name()='TgTCThue']")
         TaxAmount = ConvertFrom-XmlNumber (Get-XmlText $totals "./*[local-name()='TgTThue']")
         TotalAmount = ConvertFrom-XmlNumber (Get-XmlText $totals "./*[local-name()='TgTTTBSo']")
         TotalAmountText = Get-XmlText $totals "./*[local-name()='TgTTTBChu']"
         ProviderTaxCode = Get-XmlText $general "./*[local-name()='MSTTCGP']"
+        InvoiceLookupFields = $invoiceAdditionalFields
+        InvoiceAdditionalFields = $generalAdditionalFields
     }
 
     $details = New-Object System.Collections.Generic.List[object]
@@ -175,6 +207,9 @@ function ConvertFrom-InvoiceXml {
             DiscountRate = ConvertFrom-XmlNumber (Get-XmlText $item "./*[local-name()='TLCKhau']")
             DiscountAmount = ConvertFrom-XmlNumber (Get-XmlText $item "./*[local-name()='STCKhau']")
             TaxRate = Get-XmlText $item "./*[local-name()='TSuat']"
+            TaxType = Get-XmlText $item "./*[local-name()='LoaiThue']" (Get-XmlText $item "./*[local-name()='LTSuat']" '')
+            ItemAdditionalFields = @(Get-XmlAdditionalFields $item)
+            InvoiceSummary = $summary
             AmountBeforeTax = $amountBeforeTax
             TaxAmount = $taxAmount
             AmountWithTax = $amountWithTax

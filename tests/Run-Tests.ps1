@@ -27,6 +27,35 @@ Assert-Equal 20000 $parsed.Details[0].TaxAmount 'First item tax'
 Assert-Equal 220000 $parsed.Details[0].AmountWithTax 'First item amount with tax fallback'
 Assert-Equal 'Sản phẩm B' $parsed.Details[1].Description 'Second item description'
 
+# Dữ liệu XML đôi khi có trường thuế không phải số; exporter không được ép lỗi
+# và làm mất toàn bộ workbook.
+$badSummary = [pscustomobject]@{
+    Direction = 'purchase'; Source = 'query'; InvoiceId = 'bad-1'; InvoiceSeries = 'C26TABC'; InvoiceNumber = '123'
+    InvoiceDate = [datetime]'2026-09-20'; Currency = 'VND'; ExchangeRate = 1; SellerName = 'Seller'; SellerTaxCode = '0101111111'
+    SellerAddress = ''; SellerSigningTime = $null; TaxAuthorityCode = ''; TaxAuthoritySigningTime = $null
+    BuyerName = 'Buyer'; BuyerTaxCode = '0302222222'; BuyerAddress = ''; ProviderTaxCode = ''; TaxAmount = 0
+}
+$badDetail = [pscustomobject]@{
+    Direction = 'purchase'; InvoiceSummary = $badSummary; LineNumber = '1'; Nature = ''; ProductCode = 'P'; Description = 'P'
+    Unit = ''; Quantity = 1; UnitPrice = 100; DiscountRate = ''; DiscountAmount = ''; TaxType = ''; TaxRate = 'N/A'
+    AmountBeforeTax = 100; TaxAmount = 'N/A'; AmountWithTax = 'N/A'
+}
+$badDetailRows = @(New-ExcelDetailRows @($badDetail))
+Assert-Equal 1 $badDetailRows.Count 'Malformed nonnumeric tax values remain exportable'
+Assert-Equal 'N/A' $badDetailRows[0].Row.Cells[27].Value 'Malformed tax text is preserved for review'
+
+$soldXmlSummary = [pscustomobject]@{
+    Direction = 'sold'; Source = 'query'; InvoiceId = 'sold-1'; InvoiceSeries = 'C26SOLD'; InvoiceNumber = '9'
+    InvoiceDate = [datetime]'2026-09-20'; InvoiceDateText = '2026-09-20'; Currency = 'VND'; ExchangeRate = 1
+    SellerName = 'Actual buyer in XML'; SellerTaxCode = '0101111111'; SellerAddress = 'Buyer address'; SellerSigningTime = [datetime]'2026-09-21'
+    TaxAuthorityCode = 'CQT-1'; TaxAuthoritySigningTime = [datetime]'2026-09-22'
+    BuyerName = 'Queried seller in XML'; BuyerTaxCode = '0302222222'; BuyerAddress = 'Seller address'; ProviderTaxCode = ''; TaxAmount = 10
+}
+$soldXmlDetail = [pscustomobject]@{ InvoiceSummary = $soldXmlSummary; LineNumber = '1'; ProductCode = 'P'; Description = 'Item'; Unit = ''; Quantity = 1; UnitPrice = 10; DiscountRate = ''; DiscountAmount = ''; TaxRate = '10%'; TaxAmount = 1; AmountBeforeTax = 10; AmountWithTax = 11 }
+$soldXmlRows = @(New-ExcelXmlRows @($soldXmlDetail))
+Assert-Equal 'Actual buyer in XML' $soldXmlRows[0].Row.Cells[7].Value 'Sold XML sheet keeps NBan in its source-mapped buyer column'
+Assert-Equal 'Queried seller in XML' $soldXmlRows[0].Row.Cells[13].Value 'Sold XML sheet keeps NMua in its source-mapped seller column'
+
 $directionRoot = Join-Path ([IO.Path]::GetTempPath()) ('hddt-direction-' + [guid]::NewGuid().ToString('N'))
 $purchaseFolder = Join-Path $directionRoot 'purchase'
 $soldFolder = Join-Path $directionRoot 'sold'
@@ -68,6 +97,45 @@ try {
     $indexRows = @(Get-GdtInvoiceIndex -Config $indexConfig -Direction 'purchase')
     Assert-Equal 2 $script:IndexRequestCount 'Repeated pagination state stops requests'
     Assert-Equal 2 $indexRows.Count 'Rows from completed pages remain available'
+}
+finally { Set-Item Function:\Invoke-GdtRequest -Value $originalGdtRequest }
+
+# Một kỳ lỗi không được làm mất các kỳ còn lại của cùng nguồn.
+$script:PeriodRequestCount = 0
+Set-Item Function:\Invoke-GdtRequest -Value {
+    param($Config, $Uri)
+    $script:PeriodRequestCount++
+    if ($Uri -match '31%2F08%2F2026') { throw 'simulated period failure' }
+    return '{"datas":[],"state":""}'
+}
+try {
+    $periodConfig = [pscustomobject]@{
+        IncludeRegular = $true; IncludeSco = $false
+        FromDate = [datetime]'2026-08-20'; ToDate = [datetime]'2026-10-02'
+        BaseUrl = 'https://hoadondientu.gdt.gov.vn/api'; PageSize = 50
+    }
+    $periodRows = @(Get-GdtInvoiceIndex -Config $periodConfig -Direction 'purchase')
+    $periodErrors = @(Get-GdtIndexErrors)
+    Assert-Equal 3 $script:PeriodRequestCount 'Each monthly period is attempted independently'
+    Assert-Equal 0 $periodRows.Count 'Failed period does not fabricate rows'
+    Assert-Equal 1 $periodErrors.Count 'One period failure creates one structured error'
+    Assert-Equal '20/08/2026-31/08/2026' $periodErrors[0].Period 'Period failure retains the failed range'
+}
+finally { Set-Item Function:\Invoke-GdtRequest -Value $originalGdtRequest }
+
+# Phản hồi HTTP 200 nhưng thiếu datas phải được coi là lỗi, không phải trang rỗng.
+Set-Item Function:\Invoke-GdtRequest -Value {
+    param($Config, $Uri)
+    return '{"state":""}'
+}
+try {
+    $badPayloadConfig = [pscustomobject]@{
+        IncludeRegular = $true; IncludeSco = $false
+        FromDate = [datetime]'2026-09-01'; ToDate = [datetime]'2026-09-01'
+        BaseUrl = 'https://hoadondientu.gdt.gov.vn/api'; PageSize = 50
+    }
+    Get-GdtInvoiceIndex -Config $badPayloadConfig -Direction 'purchase' | Out-Null
+    Assert-Equal 1 @(Get-GdtIndexErrors).Count 'Successful HTTP response without datas is rejected'
 }
 finally { Set-Item Function:\Invoke-GdtRequest -Value $originalGdtRequest }
 
@@ -131,48 +199,141 @@ try {
     Assert-Equal $true (Test-Path -LiteralPath (Join-Path $tempXmlDirectory 'purchase_query_test_123.xml')) 'Flat extracted XML exists'
     Assert-Equal $false (Test-Path -LiteralPath (Join-Path $tempXmlDirectory 'readme.txt')) 'Non-XML entry is not written'
     Assert-Equal 0 @(Get-ChildItem -LiteralPath $tempXmlDirectory -Directory).Count 'No per-invoice directory is created'
+
+    $preservedPath = Join-Path $tempXmlDirectory 'preserved.xml'
+    Set-Content -LiteralPath $preservedPath -Value '<HDon />' -Encoding UTF8
+    $invalidMemory = New-Object IO.MemoryStream
+    $invalidArchive = New-Object IO.Compression.ZipArchive($invalidMemory, [IO.Compression.ZipArchiveMode]::Create, $true)
+    try {
+        $invalidEntry = $invalidArchive.CreateEntry('invoice.xml')
+        $invalidWriter = New-Object IO.StreamWriter($invalidEntry.Open())
+        try { $invalidWriter.Write('<HDon>') } finally { $invalidWriter.Dispose() }
+    }
+    finally { $invalidArchive.Dispose() }
+    $invalidRejected = $false
+    try { Expand-InvoiceXmlBytes -Bytes $invalidMemory.ToArray() -DestinationDirectory $tempXmlDirectory -FileNamePrefix 'preserved' | Out-Null }
+    catch { $invalidRejected = $true }
+    finally { $invalidMemory.Dispose() }
+    Assert-Equal $true $invalidRejected 'Malformed XML download is rejected'
+    Assert-Equal '<HDon />' ((Get-Content -LiteralPath $preservedPath -Raw).Trim()) 'Malformed download does not overwrite a good resume file'
+    Remove-Item -LiteralPath $preservedPath -Force -ErrorAction SilentlyContinue
 }
 finally {
     $zipMemory.Dispose()
     Remove-Item -LiteralPath $tempXmlDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+function Read-TestZipEntryText {
+    param($Archive, [string]$Name)
+    $entry = $Archive.GetEntry($Name)
+    if ($null -eq $entry) { throw "Thiếu entry trong workbook: $Name" }
+    $reader = New-Object IO.StreamReader($entry.Open())
+    try { return $reader.ReadToEnd() }
+    finally { $reader.Dispose() }
+}
+
+function Get-TestCellNode {
+    param($SheetDocument, [string]$Reference)
+    $manager = New-Object Xml.XmlNamespaceManager($SheetDocument.NameTable)
+    $manager.AddNamespace('x', $script:SpreadsheetNamespace)
+    return $SheetDocument.SelectSingleNode("/x:worksheet/x:sheetData/x:row/x:c[@r='$Reference']", $manager)
+}
+
+function Get-TestCellValue {
+    param($SheetDocument, [string]$Reference)
+    $cell = Get-TestCellNode $SheetDocument $Reference
+    if ($null -eq $cell) { return '' }
+    $manager = New-Object Xml.XmlNamespaceManager($SheetDocument.NameTable)
+    $manager.AddNamespace('x', $script:SpreadsheetNamespace)
+    $valueNode = $cell.SelectSingleNode('x:is/x:t', $manager)
+    if ($null -eq $valueNode) { $valueNode = $cell.SelectSingleNode('x:v', $manager) }
+    if ($null -eq $valueNode) { return '' }
+    return [string]$valueNode.InnerText
+}
+
 $tempXlsx = Join-Path ([IO.Path]::GetTempPath()) ('hddt-test-' + [guid]::NewGuid().ToString('N') + '.xlsx')
 try {
-    Export-InvoiceWorkbook -Path $tempXlsx -SummaryRows @($parsed.Summary) -DetailRows @($parsed.Details) -ErrorRows @() -Overwrite
+    # Add a known provider lookup to exercise the data-only link projection.
+    $fixtureSummary = $parsed.Summary
+    $fixtureSummary.ProviderTaxCode = '0100109106'
+    $fixtureSummary.InvoiceAdditionalFields = @([pscustomobject]@{ TTRuong = 'MaTraCuu'; DLieu = 'LOOK-001' })
+    Add-Member -InputObject $fixtureSummary -NotePropertyName GdtIndex -NotePropertyValue ([pscustomobject]@{
+        id = 'INV-LINK-001'; msttcgp = '0100109106'; nbmst = '0101111111'; mhdon = 'ABC123'
+        tthai = 2; ttxly = 2; tgtcthue = 250000; tgtkcthue = 0; tgtthue = 24000
+        thttltsuat = @([pscustomobject]@{ tsuat = '10'; thtien = '250000'; tthue = '24000'; gttsuat = '0' })
+        cttkhac = @([pscustomobject]@{ TTRuong = 'MaTraCuu'; DLieu = 'LOOK-001' })
+    }) -Force
+    $testError = [pscustomobject]@{
+        Direction = 'purchase'; Source = 'query'; SellerTaxCode = '0101111111'
+        InvoiceTemplate = '1'; InvoiceSeries = 'C26TABC'; InvoiceNumber = '123'; InvoiceDate = '2026-09-20'
+        Stage = 'Tải XML'; Endpoint = 'https://hoadondientu.gdt.gov.vn/api/query/invoices/export-xml'
+        StatusCode = 504; Attempts = 2; RetryAfterSeconds = 0
+        Error = 'Authorization: Bearer super-secret-token'; FinalResult = 'Không tải được'; Note = 'partial'
+    }
+    Export-InvoiceWorkbook -Path $tempXlsx -SummaryRows @($fixtureSummary) -DetailRows @($parsed.Details) -ErrorRows @($testError) -Overwrite
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [IO.Compression.ZipFile]::OpenRead($tempXlsx)
     try {
         Assert-Equal 1 @($zip.Entries | Where-Object FullName -eq 'xl/workbook.xml').Count 'Workbook package entry'
-        Assert-Equal 3 @($zip.Entries | Where-Object FullName -like 'xl/worksheets/sheet*.xml').Count 'Worksheet package count'
-        Assert-Equal 2 @($zip.Entries | Where-Object FullName -like 'xl/tables/table*.xml').Count 'Table package count'
+        Assert-Equal 7 @($zip.Entries | Where-Object FullName -like 'xl/worksheets/sheet*.xml').Count 'Worksheet package count'
+        Assert-Equal 0 @($zip.Entries | Where-Object FullName -like 'xl/tables/table*.xml').Count 'Data-only workbook has no table parts'
+        Assert-Equal 0 @($zip.Entries | Where-Object FullName -match 'vbaProject|MENU|Thamkhao|LinkTraCuu').Count 'No VBA or reference sheets are packaged'
 
-        for ($sheetNumber = 1; $sheetNumber -le 3; $sheetNumber++) {
-            $sheetEntry = $zip.GetEntry("xl/worksheets/sheet$sheetNumber.xml")
-            $sheetReader = New-Object IO.StreamReader($sheetEntry.Open())
-            try { [xml]$sheetDocument = $sheetReader.ReadToEnd() }
-            finally { $sheetReader.Dispose() }
-            $sheetNamespaceManager = New-Object Xml.XmlNamespaceManager($sheetDocument.NameTable)
-            $sheetNamespaceManager.AddNamespace('x', $script:SpreadsheetNamespace)
-            $sheetTableCount = @($sheetDocument.SelectNodes('/x:worksheet/x:tableParts/x:tablePart', $sheetNamespaceManager)).Count
-            $sheetFilterCount = @($sheetDocument.SelectNodes('/x:worksheet/x:autoFilter', $sheetNamespaceManager)).Count
-            if ($sheetTableCount -gt 0) {
-                Assert-Equal 0 $sheetFilterCount "Sheet $sheetNumber does not duplicate table AutoFilter at worksheet level"
-            }
-            else {
-                Assert-Equal 1 $sheetFilterCount "Sheet $sheetNumber keeps worksheet AutoFilter when there is no table"
-            }
+        [xml]$workbookDocument = Read-TestZipEntryText $zip 'xl/workbook.xml'
+        $workbookManager = New-Object Xml.XmlNamespaceManager($workbookDocument.NameTable)
+        $workbookManager.AddNamespace('x', $script:SpreadsheetNamespace)
+        $sheetNodes = @($workbookDocument.SelectNodes('/x:workbook/x:sheets/x:sheet', $workbookManager))
+        $expectedSheetNames = @('TongHopHD_Mua', 'ChiTietHD_Mua', 'ChiTietHD_Mua_XML', 'TongHopHD_Ban', 'ChiTietHD_Ban', 'ChiTietHD_Ban_XML', 'BaoCao_LoiTaiHD')
+        Assert-Equal ($expectedSheetNames -join '|') (($sheetNodes | ForEach-Object { $_.GetAttribute('name') }) -join '|') 'Source-style sheet order and names'
+        Assert-Equal $script:SourceSummaryHeaders.Count $script:SourceSummaryWidths.Count 'Summary headers and widths have equal lengths'
+        Assert-Equal $script:SourceDetailHeaders.Count $script:SourceDetailWidths.Count 'Detail headers and widths have equal lengths'
+        Assert-Equal $script:SourceXmlHeadersPurchase.Count $script:SourceXmlWidths.Count 'XML headers and widths have equal lengths'
+        Assert-Equal $script:SourceXmlHeadersSold.Count $script:SourceXmlWidths.Count 'Sold XML headers and widths have equal lengths'
+        Assert-Equal 'Công đoạn lỗi' $script:SourceErrorHeaders[9] 'Error report uses source stage header'
+
+        $sheetDocuments = @{}
+        for ($sheetNumber = 1; $sheetNumber -le 7; $sheetNumber++) {
+            [xml]$sheetDocument = Read-TestZipEntryText $zip ("xl/worksheets/sheet{0}.xml" -f $sheetNumber)
+            $sheetDocuments[$sheetNumber] = $sheetDocument
+            $manager = New-Object Xml.XmlNamespaceManager($sheetDocument.NameTable)
+            $manager.AddNamespace('x', $script:SpreadsheetNamespace)
+            Assert-Equal 0 @($sheetDocument.SelectNodes('/x:worksheet/x:tableParts/x:tablePart', $manager)).Count ("Sheet $sheetNumber has no table part")
+            $expectedFilterCount = if ($sheetNumber -eq 7) { 1 } else { 0 }
+            Assert-Equal $expectedFilterCount @($sheetDocument.SelectNodes('/x:worksheet/x:autoFilter', $manager)).Count ("Sheet $sheetNumber AutoFilter contract")
         }
 
-        $stylesEntry = $zip.GetEntry('xl/styles.xml')
-        $stylesReader = New-Object IO.StreamReader($stylesEntry.Open())
-        try { [xml]$stylesDocument = $stylesReader.ReadToEnd() }
-        finally { $stylesReader.Dispose() }
-        $namespaceManager = New-Object Xml.XmlNamespaceManager($stylesDocument.NameTable)
-        $namespaceManager.AddNamespace('x', $script:SpreadsheetNamespace)
-        $headerFont = $stylesDocument.SelectSingleNode('/x:styleSheet/x:fonts/x:font[2]', $namespaceManager)
+        $summarySheet = $sheetDocuments[1]
+        $summaryDate = Get-TestCellNode $summarySheet 'F3'
+        Assert-Equal '6' $summaryDate.GetAttribute('s') 'Summary invoice date uses date style'
+        Assert-Equal ([datetime]'2026-09-20').ToOADate().ToString('0.###############', [Globalization.CultureInfo]::InvariantCulture) (Get-TestCellValue $summarySheet 'F3') 'Summary invoice date is a numeric Excel date'
+        Assert-Equal 'https://tracuuhoadon.vetc.com.vn/' (Get-TestCellValue $summarySheet 'BC3') 'Summary lookup link'
+        Assert-Equal 'LOOK-001' (Get-TestCellValue $summarySheet 'BD3') 'Summary lookup code'
+
+        $detailSheet = $sheetDocuments[2]
+        $detailRate = Get-TestCellNode $detailSheet 'Y3'
+        Assert-Equal '8' $detailRate.GetAttribute('s') 'Detail tax rate uses percentage style'
+        Assert-Equal '0.1' (Get-TestCellValue $detailSheet 'Y3') 'Detail tax rate is stored as a fraction'
+        Assert-Equal 'https://tracuuhoadon.vetc.com.vn/' (Get-TestCellValue $detailSheet 'AF3') 'Detail lookup link'
+
+        $xmlSheet = $sheetDocuments[3]
+        Assert-Equal '2026-09-20' (Get-TestCellValue $xmlSheet 'D3') 'XML sheet keeps source invoice date text'
+        Assert-Equal '10%' (Get-TestCellValue $xmlSheet 'Y3') 'XML sheet keeps source tax-rate text'
+        Assert-Equal 'https://tracuuhoadon.vetc.com.vn/' (Get-TestCellValue $xmlSheet 'AD3') 'XML lookup link'
+        Assert-Equal 1 @($zip.Entries | Where-Object FullName -eq 'xl/worksheets/_rels/sheet1.xml.rels').Count 'Summary hyperlink relationship part'
+        Assert-Equal 1 @($zip.Entries | Where-Object FullName -eq 'xl/worksheets/_rels/sheet2.xml.rels').Count 'Detail hyperlink relationship part'
+        Assert-Equal 1 @($zip.Entries | Where-Object FullName -eq 'xl/worksheets/_rels/sheet3.xml.rels').Count 'XML hyperlink relationship part'
+
+        $errorSheet = $sheetDocuments[7]
+        $errorText = Get-TestCellValue $errorSheet 'M2'
+        Assert-Equal $true ($errorText -match '\[REDACTED\]') 'Authorization secrets are redacted from the error sheet'
+        Assert-Equal $false ($errorText -match 'super-secret-token') 'Authorization token is absent from the error sheet'
+
+        $stylesDocument = [xml](Read-TestZipEntryText $zip 'xl/styles.xml')
+        $stylesManager = New-Object Xml.XmlNamespaceManager($stylesDocument.NameTable)
+        $stylesManager.AddNamespace('x', $script:SpreadsheetNamespace)
+        $headerFont = $stylesDocument.SelectSingleNode('/x:styleSheet/x:fonts/x:font[2]', $stylesManager)
         $headerFontOrder = (($headerFont.ChildNodes | ForEach-Object { $_.LocalName }) -join ',')
-        Assert-Equal 'b,sz,color,name' $headerFontOrder 'Header font element order follows Open XML schema'
+        Assert-Equal 'sz,name,family' $headerFontOrder 'Header font element order follows Open XML schema'
     }
     finally { $zip.Dispose() }
 }
@@ -184,7 +345,7 @@ $tempEnv = Join-Path ([IO.Path]::GetTempPath()) ('hddt-test-' + [guid]::NewGuid(
 try {
     @'
 GDT_TOKEN=Bearer abcdefghijklmnopqrstuvwxyz123456
-INVOICE_DIRECTION=purchase
+INVOICE_DIRECTION=purchase ; inline comment
 FROM_DATE=01/09/2026
 TO_DATE=30/09/2026
 OUTPUT_DIR=output
@@ -200,9 +361,93 @@ OUTPUT_XLSX=test.xlsx
     Assert-Equal $true $config.LogToFile 'Default file logging'
     Assert-Equal $true $config.AdaptiveThrottle 'Default adaptive throttling'
     Assert-Equal $false $config.RedownloadXml 'Default XML resume mode'
+    Assert-Equal $null $config.ProxyUri 'No proxy is configured by default'
 }
 finally {
     Remove-Item -LiteralPath $tempEnv -Force -ErrorAction SilentlyContinue
+}
+
+# --- Proxy config: compact form, validation va credentials ---
+$tempProxyEnv = Join-Path ([IO.Path]::GetTempPath()) ('hddt-test-' + [guid]::NewGuid().ToString('N') + '.env')
+try {
+    @'
+GDT_TOKEN=abcdefghijklmnopqrstuvwxyz123456
+INVOICE_DIRECTION=purchase
+FROM_DATE=01/09/2026
+TO_DATE=30/09/2026
+OUTPUT_DIR=output
+OUTPUT_XLSX=test.xlsx
+PROXY_URL=proxy.example:8080:proxy-user:proxy-pass
+'@ | Set-Content -LiteralPath $tempProxyEnv -Encoding UTF8
+    $proxyConfig = Get-HddtConfig -EnvFile $tempProxyEnv -RepositoryRoot $root
+    Assert-Equal 'http://proxy.example:8080/' $proxyConfig.ProxyUri.AbsoluteUri 'Compact proxy host:port is normalized'
+    Assert-Equal 'proxy-user' $proxyConfig.ProxyUsername 'Compact proxy username is extracted'
+    Assert-Equal 'proxy-pass' $proxyConfig.ProxyPassword 'Compact proxy password is extracted'
+
+    @'
+GDT_TOKEN=abcdefghijklmnopqrstuvwxyz123456
+INVOICE_DIRECTION=purchase
+FROM_DATE=01/09/2026
+TO_DATE=30/09/2026
+OUTPUT_DIR=output
+OUTPUT_XLSX=test.xlsx
+PROXY_URL=http://user:password@proxy.example:8080
+'@ | Set-Content -LiteralPath $tempProxyEnv -Encoding UTF8
+    $embeddedProxyRejected = $false
+    try { Get-HddtConfig -EnvFile $tempProxyEnv -RepositoryRoot $root | Out-Null }
+    catch { $embeddedProxyRejected = $true }
+    Assert-Equal $true $embeddedProxyRejected 'Proxy URI userinfo is rejected'
+
+    @'
+GDT_TOKEN=abcdefghijklmnopqrstuvwxyz123456
+INVOICE_DIRECTION=purchase
+FROM_DATE=01/09/2026
+TO_DATE=30/09/2026
+OUTPUT_DIR=output
+OUTPUT_XLSX=test.xlsx
+PROXY_URL=http://proxy.example:8080
+PROXY_PASSWORD=orphan-password
+'@ | Set-Content -LiteralPath $tempProxyEnv -Encoding UTF8
+    $orphanProxyPasswordRejected = $false
+    try { Get-HddtConfig -EnvFile $tempProxyEnv -RepositoryRoot $root | Out-Null }
+    catch { $orphanProxyPasswordRejected = $true }
+    Assert-Equal $true $orphanProxyPasswordRejected 'Proxy password without username is rejected'
+}
+finally {
+    Remove-Item -LiteralPath $tempProxyEnv -Force -ErrorAction SilentlyContinue
+}
+
+# --- Interactive config: secure token/password prompts and no secret echo ---
+$tempInteractivePath = Join-Path ([IO.Path]::GetTempPath()) ('hddt-interactive-' + [guid]::NewGuid().ToString('N') + '.env')
+$script:InteractiveAnswers = [System.Collections.Queue]::new()
+foreach ($answer in @('', 'interactive-user', 'interactive-pass', 'purchase', '01/09/2026', '30/09/2026', 'output', 'interactive.xlsx', 'true', 'false', 'false', 'false', 'true', 'http://proxy.example:8080', 'proxy-user', 'proxy-pass')) {
+    $script:InteractiveAnswers.Enqueue([string]$answer)
+}
+$script:InteractivePrompts = New-Object System.Collections.Generic.List[string]
+function Read-Host {
+    param([string]$Prompt, [switch]$AsSecureString)
+    $script:InteractivePrompts.Add([string]$Prompt)
+    $answer = [string]$script:InteractiveAnswers.Dequeue()
+    if ($AsSecureString) {
+        $secure = New-Object Security.SecureString
+        foreach ($character in $answer.ToCharArray()) { $secure.AppendChar($character) }
+        $secure.MakeReadOnly()
+        return $secure
+    }
+    return $answer
+}
+try {
+    $interactiveConfig = Get-HddtConfig -EnvFile $tempInteractivePath -RepositoryRoot $root -Interactive
+    Assert-Equal '' $interactiveConfig.Token 'Interactive blank token selects account login'
+    Assert-Equal 'interactive-user' $interactiveConfig.Username 'Interactive username is retained in memory'
+    Assert-Equal 'interactive-pass' $interactiveConfig.Password 'Interactive password is retained in memory'
+    Assert-Equal 'http://proxy.example:8080/' $interactiveConfig.ProxyUri.AbsoluteUri 'Interactive proxy URL is parsed'
+    Assert-Equal $false (($script:InteractivePrompts -join '|') -match 'interactive-pass') 'Interactive password is not echoed in a prompt'
+    Assert-Equal $false (($script:InteractivePrompts -join '|') -match 'proxy-pass') 'Interactive proxy password is not echoed in a prompt'
+}
+finally {
+    Remove-Item Function:\Read-Host -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $tempInteractivePath -Force -ErrorAction SilentlyContinue
 }
 
 # --- Dieu khien dung an toan (Ctrl+C) ---
@@ -380,6 +625,7 @@ $rawRelated = ConvertTo-RelatedInformationText -ResponseText '{"foo":1}'
 Assert-Equal $true ($rawRelated -match '"foo"') 'Non notice response keeps JSON text'
 Assert-Equal 'Điều chỉnh' (Get-RelatedNoticeNature '2') 'Notice nature maps to Vietnamese'
 Assert-Equal '02/09/2026' (ConvertTo-RelatedDate '2026-09-02T00:00:00') 'Related date formats as dd/MM/yyyy'
+Assert-Equal '01/09/2026' (ConvertTo-RelatedDate '01/09/2026') 'Related dd/MM/yyyy date keeps Vietnamese order'
 Assert-Equal $true ((Get-GdtRelationActionHeader -EndpointName 'relative' -Source 'query' -Direction 'purchase').StartsWith('Xem%20h%C3%B3a%20%C4%91%C6%A1n%20li%C3%AAn%20quan%20(')) 'Relative action header'
 Assert-Equal ('https://hoadondientu.gdt.gov.vn/api/query/invoices/related?nbmst=0123456789&khmshdon=1&khhdon=C26TABC&shdon=123') (Get-GdtRelationUri -Config $relationConfig -Invoice $relationInvoice -EndpointName 'related') 'Related endpoint uri'
 
@@ -425,7 +671,7 @@ $tempWrapXlsx = Join-Path ([IO.Path]::GetTempPath()) ('hddt-test-' + [guid]::New
 try {
     $wrapSummary = [pscustomobject]@{
         Direction = 'purchase'; Source = 'query'; InvoiceSeries = 'C26TABC'; InvoiceNumber = '123'
-        RelatedChain = "dong 1`r`ndong 2"; RelatedInfo = 'thong tin lien quan'
+        Status = 2; RelatedChain = "dong 1`r`ndong 2"; RelatedInfo = 'thong tin lien quan'
     }
     Export-InvoiceWorkbook -Path $tempWrapXlsx -SummaryRows @($wrapSummary) -DetailRows @() -ErrorRows @() -Overwrite
     Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -434,15 +680,15 @@ try {
         $wrapStylesEntry = $wrapZip.GetEntry('xl/styles.xml')
         $wrapStylesReader = New-Object IO.StreamReader($wrapStylesEntry.Open())
         try { $wrapStylesText = $wrapStylesReader.ReadToEnd() } finally { $wrapStylesReader.Dispose() }
-        Assert-Equal $true ($wrapStylesText -match '<cellXfs count="3">') 'Wrap style adds third cell format'
+        Assert-Equal $true ($wrapStylesText -match '<cellXfs count="17">') 'Workbook contains the complete data-only style set'
         Assert-Equal $true ($wrapStylesText -match 'wrapText="1"') 'Wrap style enables text wrapping'
 
         $wrapSheetEntry = $wrapZip.GetEntry('xl/worksheets/sheet1.xml')
         $wrapSheetReader = New-Object IO.StreamReader($wrapSheetEntry.Open())
         try { $wrapSheetText = $wrapSheetReader.ReadToEnd() } finally { $wrapSheetReader.Dispose() }
-        Assert-Equal $true ($wrapSheetText -match '<c r="W2" s="2"') 'RelatedChain cell uses wrap style'
-        Assert-Equal $true ($wrapSheetText -match '<c r="AD2" s="2"') 'RelatedInfo cell uses wrap style'
-        Assert-Equal $true ($wrapSheetText -match '<c r="A2" t="inlineStr"') 'Normal cell keeps default style'
+        Assert-Equal $true ($wrapSheetText -match '<c r="BE3" s="9"') 'RelatedChain cell uses wrap style'
+        Assert-Equal $true ($wrapSheetText -match '<c r="BL3" s="9"') 'RelatedInfo cell uses wrap style'
+        Assert-Equal $true ($wrapSheetText -match '<c r="D3"[^>]*t="inlineStr"') 'Normal cell keeps default style'
     }
     finally { $wrapZip.Dispose() }
 }
@@ -453,7 +699,7 @@ finally {
 # --- Kiem tra splat: GET/DELETE khong duoc gui body ---
 $script:CapturedSplat = $null
 function Invoke-WebRequest {
-    param($Uri, $Method, $Headers, $TimeoutSec, $UseBasicParsing, $WebSession, $ErrorAction, $Body, $ContentType)
+    param($Uri, $Method, $Headers, $TimeoutSec, $UseBasicParsing, $WebSession, $ErrorAction, $Body, $ContentType, [uri]$Proxy, [pscredential]$ProxyCredential)
     $script:CapturedSplat = $PSBoundParameters
     return [pscustomobject]@{ StatusCode = 200; Content = '{"ok":true}' }
 }
@@ -481,6 +727,16 @@ try {
 
     Invoke-GdtRequest -Config $splatConfig -Uri ($splatConfig.BaseUrl + '/captcha') | Out-Null
     Assert-Equal 'Bearer test-token' ([string]$script:CapturedSplat['Headers']['Authorization']) 'Authorization header uses the token'
+
+    $proxyConfig = [pscustomobject]@{
+        BaseUrl = $splatConfig.BaseUrl; Token = 'test-token'; RequestDelayMs = 0
+        AdaptiveThrottle = $false; MaxRetries = 0; HttpTimeoutSeconds = 30
+        ProxyUri = [uri]'http://proxy.example:8080'; ProxyUsername = 'proxy-user'; ProxyPassword = 'proxy-pass'
+    }
+    Invoke-GdtRequest -Config $proxyConfig -Uri ($proxyConfig.BaseUrl + '/captcha') | Out-Null
+    Assert-Equal 'http://proxy.example:8080/' ([string]$script:CapturedSplat['Proxy']) 'Proxy URI is passed to Invoke-WebRequest'
+    Assert-Equal 'proxy-user' $script:CapturedSplat['ProxyCredential'].UserName 'Proxy credential username is passed'
+    Assert-Equal 'proxy-pass' $script:CapturedSplat['ProxyCredential'].GetNetworkCredential().Password 'Proxy credential password is passed'
 }
 finally {
     Remove-Item Function:\Invoke-WebRequest -ErrorAction SilentlyContinue
@@ -506,19 +762,6 @@ namespace HddtTest {
         public Hashtable HeadersTable { get { return _headers; } }
         public int StatusCode { get { return (int)_headers["StatusCode"]; } }
     }
-
-    public static class FakeWebExceptionFactory {
-        public static WebException Create(WebResponse response) {
-#pragma warning disable SYSLIB0050
-            var exception = (WebException)System.Runtime.Serialization.FormatterServices
-                .GetUninitializedObject(typeof(WebException));
-#pragma warning restore SYSLIB0050
-            var field = typeof(WebException).GetField("_response",
-                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-            if (field != null) { field.SetValue(exception, response); }
-            return exception;
-        }
-    }
 }
 '@
 $script:RateLimitHits = 0
@@ -528,7 +771,7 @@ function Invoke-WebRequest {
     $script:RateLimitHits++
     if ($script:RateLimitHits -le 6) {
         $fakeResponse = New-Object HddtTest.FakeWebResponse (429)
-        $exception = [HddtTest.FakeWebExceptionFactory]::Create($fakeResponse)
+        $exception = New-Object System.Net.WebException('Simulated HTTP 429', $null, [System.Net.WebExceptionStatus]::ProtocolError, $fakeResponse)
         $errorRecord = New-Object System.Management.Automation.ErrorRecord (
             $exception, 'Http429', [System.Management.Automation.ErrorCategory]::InvalidOperation, $Uri
         )
@@ -555,6 +798,31 @@ try {
 }
 finally {
     Set-Item Function:\Start-Sleep -Value $script:OriginalSleep
+    Remove-Item Function:\Invoke-WebRequest -ErrorAction SilentlyContinue
+}
+
+# Token dán tay không được tự gọi đăng nhập lại khi không có username/password.
+$script:UnauthorizedHits = 0
+function Invoke-WebRequest {
+    param($Uri, $Method, $Headers, $TimeoutSec, $UseBasicParsing, $WebSession, $ErrorAction)
+    $script:UnauthorizedHits++
+    $fakeResponse = New-Object HddtTest.FakeWebResponse (401)
+    $exception = New-Object System.Net.WebException('Simulated HTTP 401', $null, [System.Net.WebExceptionStatus]::ProtocolError, $fakeResponse)
+    $errorRecord = New-Object System.Management.Automation.ErrorRecord($exception, 'Http401', [System.Management.Automation.ErrorCategory]::InvalidOperation, $Uri)
+    throw $errorRecord
+}
+try {
+    $tokenOnlyConfig = [pscustomobject]@{
+        BaseUrl = 'https://hoadondientu.gdt.gov.vn/api'; Token = 'test-token'; Username = ''; Password = ''
+        RequestDelayMs = 0; AdaptiveThrottle = $false; MaxRetries = 0; HttpTimeoutSeconds = 30
+    }
+    $tokenOnlyRejected = $false
+    try { Invoke-GdtRequest -Config $tokenOnlyConfig -Uri ($tokenOnlyConfig.BaseUrl + '/invoices/query') | Out-Null }
+    catch { $tokenOnlyRejected = ($_.Exception.Message -match 'HTTP 401') }
+    Assert-Equal $true $tokenOnlyRejected 'Token-only 401 is surfaced to the caller'
+    Assert-Equal 1 $script:UnauthorizedHits 'Token-only 401 does not retry or re-login'
+}
+finally {
     Remove-Item Function:\Invoke-WebRequest -ErrorAction SilentlyContinue
 }
 

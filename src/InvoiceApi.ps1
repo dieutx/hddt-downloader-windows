@@ -1,5 +1,15 @@
 ﻿Set-StrictMode -Version 2.0
 
+$script:GdtIndexErrors = New-Object System.Collections.Generic.List[object]
+
+function Reset-GdtIndexErrors {
+    $script:GdtIndexErrors.Clear()
+}
+
+function Get-GdtIndexErrors {
+    return @($script:GdtIndexErrors.ToArray())
+}
+
 function Get-ObjectValue {
     param($Object, [string]$Name, $Default = $null)
     if ($null -eq $Object) { return $Default }
@@ -42,9 +52,17 @@ function ConvertTo-RelatedDate {
     if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
     $text = $Value.Trim()
     $parsed = [datetime]::MinValue
-    if (-not [datetime]::TryParse($text, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AllowWhiteSpaces, [ref]$parsed)) {
-        return $Value
+    $parsedDate = $false
+    if ($text -match '^\d{1,2}/\d{1,2}/\d{4}$') {
+        $parsedDate = [datetime]::TryParse($text, [Globalization.CultureInfo]::GetCultureInfo('vi-VN'), [Globalization.DateTimeStyles]::AllowWhiteSpaces, [ref]$parsed)
     }
+    if (-not $parsedDate) {
+        $parsedDate = [datetime]::TryParse($text, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::AllowWhiteSpaces, [ref]$parsed)
+    }
+    if (-not $parsedDate) {
+        $parsedDate = [datetime]::TryParse($text, [Globalization.CultureInfo]::GetCultureInfo('vi-VN'), [Globalization.DateTimeStyles]::AllowWhiteSpaces, [ref]$parsed)
+    }
+    if (-not $parsedDate) { return $Value }
     if ($text.EndsWith('Z') -or $parsed.Kind -eq [DateTimeKind]::Utc) { $parsed = $parsed.ToLocalTime() }
     return $parsed.ToString('dd/MM/yyyy')
 }
@@ -82,65 +100,103 @@ function Get-GdtInvoiceIndex {
         [Parameter(Mandatory = $true)][ValidateSet('purchase', 'sold')][string]$Direction
     )
 
+    Reset-GdtIndexErrors
     $results = New-Object System.Collections.Generic.List[object]
     foreach ($family in Get-GdtFamilies $Config) {
         $familyStartCount = $results.Count
         foreach ($period in Get-MonthDateRanges -FromDate $Config.FromDate -ToDate $Config.ToDate) {
-            $pageNumber = 0
-            $seenStates = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
-            Write-HddtLog INFO ('[DANH SÁCH] {0}/{1}, kỳ {2:dd/MM/yyyy}-{3:dd/MM/yyyy}.' -f $Direction, $family, $period.From, $period.To)
-            $search = 'tdlap=ge={0}T00:00:00;tdlap=le={1}T23:59:59' -f $period.From.ToString('dd/MM/yyyy'), $period.To.ToString('dd/MM/yyyy')
-            $state = $null
-            do {
-                if (Test-HddtStopRequested) {
-                    Write-HddtLog WARN ('[DANH SÁCH] Đã dừng giữa chừng; giữ lại {0} hóa đơn {1}/{2} đã nhận.' -f $results.Count, $Direction, $family)
-                    return $results.ToArray()
-                }
-                $pageNumber++
-                $uri = '{0}/{1}/invoices/{2}?sort=tdlap%3Adesc&size={3}&search={4}' -f $Config.BaseUrl, $family, $Direction, $Config.PageSize, (ConvertTo-QueryValue $search)
-                if (-not [string]::IsNullOrWhiteSpace([string]$state)) {
-                    $uri += '&state=' + (ConvertTo-QueryValue ([string]$state))
-                }
-
-                $pageWatch = [Diagnostics.Stopwatch]::StartNew()
-                $payload = (Invoke-GdtRequest -Config $Config -Uri $uri) | ConvertFrom-Json
-                $pageWatch.Stop()
-                $datas = Get-ObjectValue $payload 'datas' @()
-                $pageItems = @($datas)
-                foreach ($data in $pageItems) {
-                    $status = ConvertTo-InvoiceStatus (Get-ObjectValue $data 'tthai' $null)
-                    $results.Add([pscustomobject]@{
-                        Direction = $Direction
-                        Source = $family
-                        SellerTaxCode = [string](Get-ObjectValue $data 'nbmst' '')
-                        InvoiceSeries = [string](Get-ObjectValue $data 'khhdon' '')
-                        InvoiceNumber = [string](Get-ObjectValue $data 'shdon' '')
-                        InvoiceTemplate = [string](Get-ObjectValue $data 'khmshdon' '')
-                        InvoiceDate = [string](Get-ObjectValue $data 'tdlap' '')
-                        Status = $status
-                        # Thông tin hóa đơn gốc lấy ngay từ danh sách (không tốn request),
-                        # tương ứng WriteRelatedInvoiceInfo trong VBA.
-                        OriginalInvoiceType = Get-JsonTextValue $data 'lhdgoc'
-                        OriginalTemplateCode = Get-JsonTextValue $data 'khmshdgoc'
-                        OriginalSeries = Get-JsonTextValue $data 'khhdgoc'
-                        OriginalNumber = Get-JsonTextValue $data 'shdgoc'
-                        OriginalDate = ConvertTo-RelatedDate (Get-JsonTextValue $data 'tdlhdgoc')
-                        OriginalNote = Get-JsonTextValue $data 'gchdgoc'
-                        RelatedChain = Build-RelatedInvoiceChain -Item $data
-                        RelatedInfo = ''
-                    })
-                }
-                $state = [string](Get-ObjectValue $payload 'state' '')
-                if (-not [string]::IsNullOrWhiteSpace($state)) {
-                    $state = $state.Trim()
-                    if (-not $seenStates.Add($state)) {
-                        Write-HddtLog WARN ('[DANH SÁCH] {0}/{1}, kỳ {2:dd/MM/yyyy}-{3:dd/MM/yyyy}: API trả lại state cũ; dừng phân trang.' -f $Direction, $family, $period.From, $period.To)
-                        $state = ''
+            $uri = ''
+            $periodStartCount = $results.Count
+            try {
+                $pageNumber = 0
+                $seenStates = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+                Write-HddtLog INFO ('[DANH SÁCH] {0}/{1}, kỳ {2:dd/MM/yyyy}-{3:dd/MM/yyyy}.' -f $Direction, $family, $period.From, $period.To)
+                $search = 'tdlap=ge={0}T00:00:00;tdlap=le={1}T23:59:59' -f $period.From.ToString('dd/MM/yyyy'), $period.To.ToString('dd/MM/yyyy')
+                $state = $null
+                do {
+                    if (Test-HddtStopRequested) {
+                        Write-HddtLog WARN ('[DANH SÁCH] Đã dừng giữa chừng; giữ lại {0} hóa đơn {1}/{2} đã nhận.' -f $results.Count, $Direction, $family)
+                        return $results.ToArray()
                     }
-                }
-                $nextText = if ([string]::IsNullOrWhiteSpace([string]$state)) { 'hết trang' } else { 'còn trang' }
-                Write-HddtLog INFO ('[DANH SÁCH] Trang {0}: HTTP 200 | +{1} hóa đơn | lũy kế {2} | {3} | {4} ms.' -f $pageNumber, $pageItems.Count, ($results.Count - $familyStartCount), $nextText, $pageWatch.ElapsedMilliseconds)
-            } while (-not [string]::IsNullOrWhiteSpace([string]$state))
+                    $pageNumber++
+                    $uri = '{0}/{1}/invoices/{2}?sort=tdlap%3Adesc&size={3}&search={4}' -f $Config.BaseUrl, $family, $Direction, $Config.PageSize, (ConvertTo-QueryValue $search)
+                    if (-not [string]::IsNullOrWhiteSpace([string]$state)) {
+                        $uri += '&state=' + (ConvertTo-QueryValue ([string]$state))
+                    }
+
+                    $pageWatch = [Diagnostics.Stopwatch]::StartNew()
+                    $payload = (Invoke-GdtRequest -Config $Config -Uri $uri) | ConvertFrom-Json
+                    $pageWatch.Stop()
+                    $datasProperty = if ($null -eq $payload) { $null } else { $payload.PSObject.Properties['datas'] }
+                    if ($null -eq $datasProperty -or $null -eq $datasProperty.Value) {
+                        throw 'Phản hồi danh sách không hợp lệ: thiếu trường datas.'
+                    }
+                    $pageItems = @($datasProperty.Value)
+                    foreach ($data in $pageItems) {
+                        if ($null -eq $data) { continue }
+                        $status = ConvertTo-InvoiceStatus (Get-ObjectValue $data 'tthai' $null)
+                        $results.Add([pscustomobject]@{
+                            Direction = $Direction
+                            Source = $family
+                            SellerTaxCode = [string](Get-ObjectValue $data 'nbmst' '')
+                            InvoiceSeries = [string](Get-ObjectValue $data 'khhdon' '')
+                            InvoiceNumber = [string](Get-ObjectValue $data 'shdon' '')
+                            InvoiceTemplate = [string](Get-ObjectValue $data 'khmshdon' '')
+                            InvoiceDate = [string](Get-ObjectValue $data 'tdlap' '')
+                            Status = $status
+                            ValidationStatus = [string](Get-ObjectValue $data 'ttxly' '')
+                            # Thông tin hóa đơn gốc lấy ngay từ danh sách (không tốn request),
+                            # tương ứng WriteRelatedInvoiceInfo trong VBA.
+                            OriginalInvoiceType = Get-JsonTextValue $data 'lhdgoc'
+                            OriginalTemplateCode = Get-JsonTextValue $data 'khmshdgoc'
+                            OriginalSeries = Get-JsonTextValue $data 'khhdgoc'
+                            OriginalNumber = Get-JsonTextValue $data 'shdgoc'
+                            OriginalDate = ConvertTo-RelatedDate (Get-JsonTextValue $data 'tdlhdgoc')
+                            OriginalNote = Get-JsonTextValue $data 'gchdgoc'
+                            RelatedChain = Build-RelatedInvoiceChain -Item $data
+                            RelatedInfo = ''
+                            # Keep the complete list item for the data-only Excel
+                            # projection.  The VBA summary writer receives this
+                            # same JSON object directly.
+                            GdtIndex = $data
+                        })
+                    }
+                    $state = [string](Get-ObjectValue $payload 'state' '')
+                    if (-not [string]::IsNullOrWhiteSpace($state)) {
+                        $state = $state.Trim()
+                        if (-not $seenStates.Add($state)) {
+                            Write-HddtLog WARN ('[DANH SÁCH] {0}/{1}, kỳ {2:dd/MM/yyyy}-{3:dd/MM/yyyy}: API trả lại state cũ; dừng phân trang.' -f $Direction, $family, $period.From, $period.To)
+                            $state = ''
+                        }
+                    }
+                    $nextText = if ([string]::IsNullOrWhiteSpace([string]$state)) { 'hết trang' } else { 'còn trang' }
+                    Write-HddtLog INFO ('[DANH SÁCH] Trang {0}: HTTP 200 | +{1} hóa đơn | lũy kế {2} | {3} | {4} ms.' -f $pageNumber, $pageItems.Count, ($results.Count - $familyStartCount), $nextText, $pageWatch.ElapsedMilliseconds)
+                } while (-not [string]::IsNullOrWhiteSpace([string]$state))
+                Write-HddtLog INFO ('[DANH SÁCH] Hoàn tất {0}/{1}, kỳ {2:dd/MM/yyyy}-{3:dd/MM/yyyy}: {4} hóa đơn.' -f $Direction, $family, $period.From, $period.To, ($results.Count - $periodStartCount))
+            }
+            catch {
+                $errorText = $_.Exception.Message
+                $script:GdtIndexErrors.Add([pscustomobject]@{
+                    Direction = $Direction
+                    Source = $family
+                    Period = ('{0:dd/MM/yyyy}-{1:dd/MM/yyyy}' -f $period.From, $period.To)
+                    SellerTaxCode = ''
+                    InvoiceTemplate = ''
+                    InvoiceSeries = ''
+                    InvoiceNumber = ''
+                    InvoiceDate = ''
+                    Stage = 'Danh sách'
+                    Endpoint = if ([string]::IsNullOrWhiteSpace($uri)) { Get-GdtLastRequestUri } else { $uri }
+                    StatusCode = Get-GdtLastStatusCode
+                    Attempts = Get-GdtLastRequestAttempts
+                    RetryAfterSeconds = Get-GdtLastRetryAfterSeconds
+                    RecordedAt = [datetime]::Now
+                    Error = $errorText
+                    FinalResult = 'Không lấy được danh sách'
+                    Note = ('Kỳ {0:dd/MM/yyyy}-{1:dd/MM/yyyy}; đã bỏ qua kỳ này và tiếp tục kỳ/nguồn/chiều còn lại.' -f $period.From, $period.To)
+                })
+                Write-HddtLog ERROR ('[DANH SÁCH] {0}/{1}, kỳ {2:dd/MM/yyyy}-{3:dd/MM/yyyy} thất bại: {4}; tiếp tục xử lý phần còn lại.' -f $Direction, $family, $period.From, $period.To, $errorText)
+            }
         }
         Write-HddtLog INFO ('[DANH SÁCH] Hoàn tất {0}/{1}: {2} hóa đơn.' -f $Direction, $family, ($results.Count - $familyStartCount))
     }
@@ -285,12 +341,16 @@ function ConvertFrom-GdtJsonArray {
     catch { throw 'Phản hồi API không hợp lệ' }
     $dataProperty = $null
     if ($null -ne $parsed) { $dataProperty = $parsed.PSObject.Properties['datas'] }
-    if ($null -ne $dataProperty -and $null -ne $dataProperty.Value) { return @($dataProperty.Value) }
+    if ($null -ne $dataProperty) { return @($dataProperty.Value) }
+    # Windows PowerShell 5.1 preserves a one-item JSON array as Object[],
+    # while ConvertFrom-Json may unroll an empty array to $null.
+    if ($null -eq $parsed) { return @() }
+    if ($parsed -is [System.Array]) { return @($parsed) }
     # JSON gốc là mảng (kể cả mảng một phần tử, pipeline có thể đã unroll) thì
     # phần tử/đối tượng được trả về phải có các trường của một hóa đơn liên quan;
     # object bọc "datas" đã xử lý ở trên, còn lại nếu có thuộc tính hóa đơn là
     # mảng một phần tử đã bị unroll.
-    if ($null -ne $parsed -and $null -ne $parsed.PSObject.Properties['shdon']) { return @($parsed) }
+    if ($null -ne $parsed.PSObject.Properties['shdon']) { return @($parsed) }
     throw 'Phản hồi API không hợp lệ'
 }
 
@@ -482,29 +542,53 @@ function Expand-InvoiceXmlBytes {
 
     Add-Type -AssemblyName System.IO.Compression
     New-Item -ItemType Directory -Path $DestinationDirectory -Force | Out-Null
+    $stagingDirectory = Join-Path $DestinationDirectory ('.hddt-xml-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
     $memoryStream = New-Object IO.MemoryStream (,$Bytes)
     $archive = $null
     $xmlFiles = New-Object System.Collections.Generic.List[string]
     try {
         $archive = New-Object IO.Compression.ZipArchive($memoryStream, [IO.Compression.ZipArchiveMode]::Read, $false)
         $xmlEntries = @($archive.Entries | Where-Object { [IO.Path]::GetExtension($_.Name).ToLowerInvariant() -eq '.xml' })
+        if ($xmlEntries.Count -eq 0) { throw 'Phản hồi không chứa file XML.' }
+
+        # Extract and validate every XML in a private staging directory first.
+        # A truncated download must not replace a previously good resume file.
         for ($index = 0; $index -lt $xmlEntries.Count; $index++) {
             $entry = $xmlEntries[$index]
             $suffix = if ($xmlEntries.Count -eq 1) { '' } else { '_{0}' -f ($index + 1) }
-            $targetPath = Join-Path $DestinationDirectory ($FileNamePrefix + $suffix + '.xml')
+            $stagedPath = Join-Path $stagingDirectory ($FileNamePrefix + $suffix + '.xml')
             $inputStream = $entry.Open()
-            $outputStream = [IO.File]::Create($targetPath)
+            $outputStream = [IO.File]::Create($stagedPath)
             try { $inputStream.CopyTo($outputStream) }
             finally {
                 $outputStream.Dispose()
                 $inputStream.Dispose()
             }
+            $settings = New-Object System.Xml.XmlReaderSettings
+            $settings.DtdProcessing = [System.Xml.DtdProcessing]::Prohibit
+            $settings.XmlResolver = $null
+            $reader = [System.Xml.XmlReader]::Create($stagedPath, $settings)
+            try {
+                while ($reader.Read()) { }
+            }
+            finally { $reader.Dispose() }
+        }
+
+        for ($index = 0; $index -lt $xmlEntries.Count; $index++) {
+            $suffix = if ($xmlEntries.Count -eq 1) { '' } else { '_{0}' -f ($index + 1) }
+            $stagedPath = Join-Path $stagingDirectory ($FileNamePrefix + $suffix + '.xml')
+            $targetPath = Join-Path $DestinationDirectory ($FileNamePrefix + $suffix + '.xml')
+            Move-Item -LiteralPath $stagedPath -Destination $targetPath -Force
             $xmlFiles.Add($targetPath)
         }
     }
     finally {
         if ($null -ne $archive) { $archive.Dispose() }
         $memoryStream.Dispose()
+        if (Test-Path -LiteralPath $stagingDirectory) {
+            Remove-Item -LiteralPath $stagingDirectory -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
     return $xmlFiles.ToArray()
 }
@@ -516,6 +600,7 @@ function Save-GdtInvoiceXml {
         [Parameter(Mandatory = $true)]$Invoice
     )
 
+    Reset-GdtRequestContext
     foreach ($required in 'SellerTaxCode', 'InvoiceSeries', 'InvoiceNumber', 'InvoiceTemplate') {
         if ([string]::IsNullOrWhiteSpace([string](Get-ObjectValue $Invoice $required ''))) {
             throw "Thiếu trường bắt buộc $required trong dữ liệu hóa đơn."
@@ -541,12 +626,6 @@ function Save-GdtInvoiceXml {
         Write-HddtLog DEBUG ('Tái sử dụng {0} XML đã tải trong thư mục {1}.' -f $existingXmlFiles.Count, $directionDirectory)
         return $existingXmlFiles
     }
-    if ($Config.RedownloadXml) {
-        foreach ($existingXmlFile in $existingXmlFiles) {
-            Remove-Item -LiteralPath $existingXmlFile -Force
-        }
-    }
-
     $responseBytes = [byte[]](Invoke-GdtRequest -Config $Config -Uri $uri -AsBytes)
     try {
         $xmlFiles = @(Expand-InvoiceXmlBytes -Bytes $responseBytes -DestinationDirectory $directionDirectory -FileNamePrefix $baseName)
@@ -556,6 +635,11 @@ function Save-GdtInvoiceXml {
     }
 
     if ($xmlFiles.Count -eq 0) { throw 'Phản hồi không chứa file XML.' }
+    foreach ($existingXmlFile in $existingXmlFiles) {
+        if ($xmlFiles -notcontains $existingXmlFile) {
+            Remove-Item -LiteralPath $existingXmlFile -Force -ErrorAction SilentlyContinue
+        }
+    }
     Write-HddtLog DEBUG ('Đã ghi {0} XML vào thư mục {1}; không lưu file ZIP.' -f $xmlFiles.Count, $directionDirectory)
     return $xmlFiles
 }

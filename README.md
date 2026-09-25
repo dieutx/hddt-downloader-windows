@@ -1,6 +1,6 @@
 # HDDT Downloader — Tải hóa đơn điện tử GDT bằng PowerShell
 
-Tự động tải **XML hóa đơn điện tử** từ `hoadondientu.gdt.gov.vn` và tạo file **Excel `.xlsx`** gồm bảng tổng hợp, chi tiết và báo cáo lỗi. Không cần Microsoft Excel, không cần cài thư viện, không cần nhập CAPTCHA tay.
+Tự động tải **XML hóa đơn điện tử** từ `hoadondientu.gdt.gov.vn` và tạo file **Excel `.xlsx`** dữ liệu-only gồm các sheet tổng hợp, chi tiết, chi tiết XML và báo cáo lỗi. Không cần Microsoft Excel, không cần cài thư viện, không cần nhập CAPTCHA tay. Workbook **không chứa VBA, sheet `MENU` hoặc sheet tham khảo**; dữ liệu tra cứu được nhúng trong mã nguồn.
 
 > 💡 **Chỉ cần 3 bước**: cài PowerShell → cấu hình `.env` → chạy `run.cmd`. Xem [Bắt đầu nhanh](#-bắt-đầu-nhanh-windows).
 <img width="945" height="633" alt="image" src="https://github.com/user-attachments/assets/23668d0d-c5bc-48ab-8643-44898c4e61c1" />
@@ -13,6 +13,8 @@ Tự động tải **XML hóa đơn điện tử** từ `hoadondientu.gdt.gov.vn
 - **Hai cách đăng nhập**: dán token từ trình duyệt, **hoặc** điền tài khoản + mật khẩu — chương trình tự đọc CAPTCHA và tự đăng nhập lại khi token hết hạn.
 - **Chịu được GDT giới hạn tốc độ**: bị HTTP 429 thì tự chờ dài dần (tối đa 10 phút/lần, 12 lần) rồi tiếp tục, không phải chạy lại từ đầu.
 - **Dừng an toàn bằng Ctrl+C**: dữ liệu đã tải vẫn được ghi ra Excel.
+- **Tương tác tùy chọn**: chạy `run-interactive.cmd` để nhập cấu hình mà không ghi token/mật khẩu vào `.env`; có thể dùng proxy cho IP bị GDT chặn.
+- **Proxy tùy chọn**: hỗ trợ HTTP/HTTPS proxy, proxy có username/password và dạng rút gọn `host:port:username:password`.
 - Cùng logic với dự án Excel VBA [TaiHoaDonDienTu](https://github.com/dieutx/TaiHoaDonDienTu) (nguồn gốc ý tưởng do thành viên **ongke0711** chia sẻ trên diễn đàn [Giải Pháp Excel](https://www.giaiphapexcel.com/diendan/threads/t%E1%BA%A3i-h%C3%B3a-%C4%91%C6%A1n-%C4%91i%E1%BB%87n-t%E1%BB%AD-https-hoadondientu-gdt-gov-vn-excel-vba.171723/)).
 
 ### Bộ công cụ "Tải dữ liệu thuế điện tử" của cùng tác giả
@@ -52,17 +54,31 @@ TO_DATE=30/09/2026             ; đến ngày
 INVOICE_DIRECTION=both         ; mua vào + bán ra
 ```
 
-**Bước 3 — Nhấn đúp `run.cmd`** (hoặc gõ `run.cmd` trong CMD). Xong!
+**Bước 3 — Chọn một trong hai cách chạy**
+
+- Nhấn đúp `run.cmd` (hoặc gõ `run.cmd` trong CMD) để dùng `.env`.
+- Nhấn đúp `run-interactive.cmd` nếu muốn nhập trực tiếp trên terminal. Các giá trị nhập ở chế độ này chỉ tồn tại trong bộ nhớ của phiên chạy, không tự ghi đè `.env`.
 
 Kết quả nằm trong thư mục `output\`:
 
 ```text
 output\
-  HoaDonDienTu.xlsx        ← mở bằng Excel: tổng hợp, chi tiết, lỗi
+  HoaDonDienTu.xlsx        ← workbook dữ liệu-only, 7 sheet
   xml\purchase\*.xml       ← XML hóa đơn mua vào
   xml\sold\*.xml           ← XML hóa đơn bán ra
   logs\*.log               ← nhật ký chi tiết từng bước
 ```
+
+Workbook gồm các sheet:
+
+| Sheet | Nội dung |
+|---|---|
+| `TongHopHD_Mua` / `TongHopHD_Ban` | Tổng hợp hóa đơn mua vào / bán ra, thuế, phí, tra cứu và chuỗi hóa đơn liên quan |
+| `ChiTietHD_Mua` / `ChiTietHD_Ban` | Dữ liệu từng mã hàng hóa dịch vụ và kiểm tra tiền thuế |
+| `ChiTietHD_Mua_XML` / `ChiTietHD_Ban_XML` | Dữ liệu chi tiết đọc trực tiếp từ XML |
+| `BaoCao_LoiTaiHD` | Lỗi theo từng hóa đơn, endpoint, HTTP status, số lần thử và kết quả cuối |
+
+Không có table/VBA và không có sheet `MENU`, `Thamkhao` hoặc `LinkTraCuu` trong file xuất.
 
 ---
 
@@ -99,7 +115,9 @@ nano .env        # điền như Bước 2 của Windows ở trên
 
 ```bash
 pwsh -NoProfile -File Invoke-Hddt.ps1          # tải hóa đơn từ GDT
+pwsh -NoProfile -File Invoke-Hddt.ps1 -Interactive  # nhập cấu hình trực tiếp
 pwsh -NoProfile -File Parse-LocalXml.ps1       # chỉ parse XML có sẵn
+pwsh -NoProfile -File Parse-LocalXml.ps1 -Interactive
 ```
 
 **Lưu ý khi chạy trên Linux/macOS:**
@@ -152,6 +170,8 @@ GDT_PASSWORD=
 | Biến | Giá trị | Ý nghĩa |
 |---|---|---|
 | `GDT_TOKEN` / `GDT_USERNAME` + `GDT_PASSWORD` | | Chọn **một** trong hai cách đăng nhập |
+| `PROXY_URL` | `http://host:port` | Proxy/VPN cho IP bị GDT chặn; cũng nhận được `host:port:user:password` |
+| `PROXY_USERNAME` / `PROXY_PASSWORD` | | Thông tin đăng nhập proxy; không ghi vào log |
 | `FROM_DATE` / `TO_DATE` | `dd/MM/yyyy` | Khoảng ngày lập hóa đơn cần tải |
 | `INVOICE_DIRECTION` | `purchase` / `sold` / `both` | Mua vào / bán ra / cả hai |
 | `INCLUDE_REGULAR` | `true`/`false` | Lấy hóa đơn điện tử thường (nguồn `query`) |
@@ -164,6 +184,28 @@ GDT_PASSWORD=
 | `MAX_RETRIES` | `4` | Retry cho lỗi mạng/5xx (riêng 429 tự retry tới 12 lần) |
 | `HTTP_TIMEOUT_SECONDS` | `90` | Chờ tối đa mỗi request |
 
+### Khi IP Việt Nam bị chặn / dùng proxy
+
+Khi GDT không truy cập được từ IP hiện tại, đặt proxy trong `.env`:
+
+```dotenv
+PROXY_URL=http://127.0.0.1:8080
+PROXY_USERNAME=
+PROXY_PASSWORD=
+```
+
+Proxy có đăng nhập:
+
+```dotenv
+PROXY_URL=proxy.example:8080
+PROXY_USERNAME=proxy-user
+PROXY_PASSWORD=proxy-password
+```
+
+Có thể dán trực tiếp dạng `host:port:username:password` vào `PROXY_URL`; chương trình sẽ tách thành URL và credentials. Không đặt username/password trong URL (`http://user:pass@...`) để tránh lộ bí mật trong log. Mọi request — CAPTCHA, đăng nhập, danh sách, related và tải XML — đều dùng cùng proxy. Nếu không dùng proxy, để ba biến `PROXY_*` trống.
+
+Trong `run-interactive.cmd`, nhập URL proxy và credentials khi được hỏi. Nhập `CLEAR` ở ô URL để tắt proxy. Token, mật khẩu GDT và mật khẩu proxy được đọc bằng prompt bí mật, không hiển thị giá trị và không ghi vào `.env`.
+
 ### Đầu ra và log
 
 | Biến | Giá trị | Ý nghĩa |
@@ -175,6 +217,8 @@ GDT_PASSWORD=
 | `PROGRESS_EVERY` | `1` | In tiến độ mỗi N hóa đơn |
 
 ### Chỉ parse XML có sẵn (dùng với `parse-local.cmd`) — không cần token
+
+Có thể chạy `parse-local.cmd` để đọc `.env`, hoặc `parse-local-interactive.cmd` để nhập `LOCAL_XML_DIR` và các tham số đầu ra ngay trên terminal. Chế độ interactive không cần token, proxy hoặc Internet.
 
 | Biến | Giá trị | Ý nghĩa |
 |---|---|---|
@@ -193,7 +237,10 @@ Không cần làm gì: chương trình tự chờ 15s → 30s → 60s → ... �
 Không: đặt `REDOWNLOAD_XML=false` rồi chạy lại — XML đã có sẽ được dùng lại, chỉ tải hóa đơn còn thiếu.
 
 **Cần lại chuỗi hóa đơn bị thay thế/điều chỉnh?**
-Giữ `FETCH_RELATED=true`. Kết quả nằm ở cột `RelatedChain`, `RelatedInfo`, `Original*` trong sheet `TongHop`. Nếu hóa đơn không ở trạng thái 2-6 thì không có gì để lấy, cột sẽ trống.
+Giữ `FETCH_RELATED=true`. Kết quả nằm ở các cột `Chuỗi hóa đơn liên quan` đến `Thông tin liên quan` trong sheet `TongHopHD_Mua`/`TongHopHD_Ban`. Nếu hóa đơn không ở trạng thái 2-6 thì không có gì để lấy, các cột liên quan sẽ trống.
+
+**Một nguồn hoặc một kỳ bị lỗi 504/500?**
+Chương trình ghi lỗi vào `BaoCao_LoiTaiHD`, bỏ qua nguồn/kỳ đó và tiếp tục phần còn lại. Nếu không lấy được hóa đơn nào, workbook lỗi vẫn được tạo nhưng tiến trình trả mã thoát `2`; nếu đã có một phần dữ liệu, mã thoát là `0` để batch tiếp tục xử lý.
 
 **Muốn tạm dừng?**
 Ctrl+C lần 1: request hiện tại chạy xong rồi dừng, dữ liệu vẫn được ghi ra Excel. Ctrl+C lần 2: dừng ngay (không xuất Excel).
@@ -223,6 +270,6 @@ Test không gọi mạng và không cần token thật.
 
 ## Bảo mật
 
-- Mật khẩu chỉ giữ trong bộ nhớ phiên chạy, không ghi vào log hay file Excel.
+- Mật khẩu/token không được ghi vào log hay file Excel; ở chế độ interactive chúng chỉ tồn tại trong bộ nhớ phiên chạy. Nếu dùng `.env`, hãy tự bảo vệ file này.
 - Authorization header chỉ gửi tới host GDT cố định trong mã nguồn.
 - Đừng commit `.env`, token hay dữ liệu hóa đơn thật vào Git (`.env` đã nằm trong `.gitignore`).

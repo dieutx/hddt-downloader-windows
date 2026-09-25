@@ -1,5 +1,8 @@
 ﻿[CmdletBinding()]
-param([string]$EnvFile)
+param(
+    [string]$EnvFile,
+    [switch]$Interactive
+)
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
@@ -14,6 +17,32 @@ if ([string]::IsNullOrWhiteSpace($EnvFile)) { $EnvFile = Join-Path $PSScriptRoot
 . (Join-Path $PSScriptRoot 'src\ExcelExporter.ps1')
 . (Join-Path $PSScriptRoot 'src\Login.ps1')
 
+function Set-HddtObjectValue {
+    param($Object, [string]$Name, $Value)
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -eq $property) {
+        Add-Member -InputObject $Object -NotePropertyName $Name -NotePropertyValue $Value
+    }
+    else {
+        $property.Value = $Value
+    }
+}
+
+function Merge-HddtParsedSummary {
+    param($Target, $Parsed)
+    if ($null -eq $Target -or $null -eq $Parsed) { return }
+    foreach ($property in $Parsed.PSObject.Properties) {
+        if ($property.Name -in @('Direction', 'Source', 'XmlFile', 'GdtIndex', 'Status', 'RelatedChain', 'RelatedInfo', 'OriginalInvoiceType', 'OriginalTemplateCode', 'OriginalSeries', 'OriginalNumber', 'OriginalDate', 'OriginalNote')) { continue }
+        $current = Get-ObjectValue $Target $property.Name $null
+        if ($null -eq $current -or ($current -is [string] -and [string]::IsNullOrWhiteSpace($current))) {
+            Set-HddtObjectValue $Target $property.Name $property.Value
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace([string](Get-ObjectValue $Target 'XmlFile' ''))) {
+        Set-HddtObjectValue $Target 'XmlFile' $Parsed.XmlFile
+    }
+}
+
 # Quy ước log INFO: [THẺ GIAI ĐOẠN] nội dung | chỉ số | thời gian.
 # Các thẻ: CẤU HÌNH, ĐĂNG NHẬP, DANH SÁCH, TẢI XML, LIÊN QUAN, XUẤT FILE, KẾT QUẢ.
 Initialize-HddtConsole
@@ -24,7 +53,7 @@ if (Register-HddtStopHandler) {
 }
 
 try {
-    $config = Get-HddtConfig -EnvFile $EnvFile -RepositoryRoot $PSScriptRoot
+    $config = Get-HddtConfig -EnvFile $EnvFile -RepositoryRoot $PSScriptRoot -Interactive:$Interactive
     New-Item -ItemType Directory -Path $config.OutputDirectory -Force | Out-Null
     New-Item -ItemType Directory -Path $config.XmlDirectory -Force | Out-Null
     foreach ($direction in $config.Directions) {
@@ -55,6 +84,7 @@ try {
     }
 
     $allInvoices = New-Object System.Collections.Generic.List[object]
+    $indexErrors = New-Object System.Collections.Generic.List[object]
     foreach ($direction in $config.Directions) {
         if (Test-HddtStopRequested) {
             Write-HddtLog WARN '[DANH SÁCH] Đã yêu cầu dừng; không lấy thêm danh sách hóa đơn.'
@@ -73,6 +103,7 @@ try {
             throw
         }
         foreach ($item in $items) { $allInvoices.Add($item) }
+        foreach ($indexError in @(Get-GdtIndexErrors)) { $indexErrors.Add($indexError) }
         Write-HddtLog INFO ('[DANH SÁCH] {0}: +{1} hóa đơn | tổng {2} | chạy {3}.' -f $direction, ($allInvoices.Count - $beforeCount), $allInvoices.Count, (Get-HddtElapsedText))
     }
 
@@ -81,6 +112,7 @@ try {
     $summaryBindings = New-Object System.Collections.Generic.List[object]
     $detailRows = New-Object System.Collections.Generic.List[object]
     $errorRows = New-Object System.Collections.Generic.List[object]
+    foreach ($indexError in $indexErrors) { $errorRows.Add($indexError) }
     $current = 0
 
     foreach ($invoice in $allInvoices) {
@@ -91,13 +123,44 @@ try {
         $current++
         $label = Get-InvoiceLabel -Invoice $invoice
         $detailBefore = $detailRows.Count
+        # Ghi dòng tổng hợp ngay khi nhận được item danh sách. Nếu XML lỗi,
+        # người dùng vẫn thấy hóa đơn và lỗi tương ứng trong workbook.
+        $summary = [pscustomobject]@{
+            Direction = $invoice.Direction
+            Source = $invoice.Source
+            XmlFile = ''
+            InvoiceId = ''
+            TemplateCode = $invoice.InvoiceTemplate
+            InvoiceSeries = $invoice.InvoiceSeries
+            InvoiceNumber = $invoice.InvoiceNumber
+            InvoiceDate = $invoice.InvoiceDate
+            SellerTaxCode = $invoice.SellerTaxCode
+            Status = $invoice.Status
+            ValidationStatus = $invoice.ValidationStatus
+            GdtIndex = $invoice.GdtIndex
+            RelatedChain = $invoice.RelatedChain
+            RelatedInfo = ''
+            OriginalInvoiceType = $invoice.OriginalInvoiceType
+            OriginalTemplateCode = $invoice.OriginalTemplateCode
+            OriginalSeries = $invoice.OriginalSeries
+            OriginalNumber = $invoice.OriginalNumber
+            OriginalDate = $invoice.OriginalDate
+            OriginalNote = $invoice.OriginalNote
+        }
+        $summaryRows.Add($summary)
+        $summaryBindings.Add([pscustomobject]@{ Summary = $summary; Invoice = $invoice })
+        $stage = 'Tải XML'
         try {
             Write-HddtLog DEBUG ('Bắt đầu hóa đơn {0}/{1}: {2} [{3}]' -f $current, $allInvoices.Count, $label, $invoice.Source)
             $xmlFiles = @(Save-GdtInvoiceXml -Config $config -Invoice $invoice)
+            $firstXml = $true
             foreach ($xmlFile in $xmlFiles) {
+                $stage = 'Parse XML'
                 $parsed = ConvertFrom-InvoiceXml -Path $xmlFile -Direction $invoice.Direction -Source $invoice.Source
-                $summaryRows.Add($parsed.Summary)
-                $summaryBindings.Add([pscustomobject]@{ Summary = $parsed.Summary; Invoice = $invoice })
+                if ($firstXml) {
+                    Merge-HddtParsedSummary -Target $summary -Parsed $parsed.Summary
+                    $firstXml = $false
+                }
                 foreach ($row in $parsed.Details) { $detailRows.Add($row) }
             }
 
@@ -111,7 +174,24 @@ try {
                 Write-HddtLog WARN ('[TẢI XML] Dừng khi tải {0}: {1}' -f $label, $_.Exception.Message)
                 break
             }
-            $errorRows.Add([pscustomobject]@{ Direction=$invoice.Direction; Source=$invoice.Source; Invoice=$label; Error=$_.Exception.Message })
+            $errorRows.Add([pscustomobject]@{
+                Direction = $invoice.Direction
+                Source = $invoice.Source
+                SellerTaxCode = $invoice.SellerTaxCode
+                InvoiceTemplate = $invoice.InvoiceTemplate
+                InvoiceSeries = $invoice.InvoiceSeries
+                InvoiceNumber = $invoice.InvoiceNumber
+                InvoiceDate = $invoice.InvoiceDate
+                Stage = $stage
+                Endpoint = Get-GdtLastRequestUri
+                StatusCode = Get-GdtLastStatusCode
+                Attempts = Get-GdtLastRequestAttempts
+                RetryAfterSeconds = Get-GdtLastRetryAfterSeconds
+                RecordedAt = [datetime]::Now
+                Error = $_.Exception.Message
+                FinalResult = 'Không tải được'
+                Note = ''
+            })
             Write-HddtLog WARN ('[TẢI XML] Không tải được {0} ({1}/{2}): {3}' -f $label, $current, $allInvoices.Count, $_.Exception.Message)
         }
     }
@@ -151,8 +231,8 @@ try {
         }
         if ($null -eq $relation) { continue }
         foreach ($columnName in $relatedColumns) {
-            Add-Member -InputObject $binding.Summary -NotePropertyName $columnName `
-                -NotePropertyValue ([string](Get-ObjectValue $relation $columnName ''))
+            Set-HddtObjectValue -Object $binding.Summary -Name $columnName `
+                -Value ([string](Get-ObjectValue $relation $columnName ''))
         }
         $relatedHandled++
     }
@@ -186,6 +266,10 @@ try {
     }
     if ($exported) {
         Write-HddtLog INFO ('[KẾT QUẢ] Tổng hợp {0} | chi tiết {1} | lỗi {2}.' -f $summaryRows.Count, $detailRows.Count, $errorRows.Count)
+    }
+    if (-not $stopRequested -and $summaryRows.Count -eq 0 -and $errorRows.Count -gt 0) {
+        Write-HddtLog ERROR '[KẾT QUẢ] Không lấy được hóa đơn nào; workbook chỉ chứa báo cáo lỗi. Mã thoát 2.'
+        exit 2
     }
     exit 0
 }

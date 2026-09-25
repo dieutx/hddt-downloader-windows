@@ -14,6 +14,8 @@ $script:GdtWebSession = New-Object Microsoft.PowerShell.Commands.WebRequestSessi
 $script:HddtStopRequested = $false
 $script:LastGdtRequestAttempts = 0
 $script:LastGdtStatusCode = 0
+$script:LastGdtRequestUri = ''
+$script:LastGdtRetryAfterSeconds = 0
 
 function Reset-HddtStopRequest {
     $script:HddtStopRequested = $false
@@ -35,6 +37,21 @@ function Get-GdtLastRequestAttempts {
 
 function Get-GdtLastStatusCode {
     return [int]$script:LastGdtStatusCode
+}
+
+function Get-GdtLastRequestUri {
+    return [string]$script:LastGdtRequestUri
+}
+
+function Get-GdtLastRetryAfterSeconds {
+    return [int]$script:LastGdtRetryAfterSeconds
+}
+
+function Reset-GdtRequestContext {
+    $script:LastGdtRequestAttempts = 0
+    $script:LastGdtStatusCode = 0
+    $script:LastGdtRequestUri = ''
+    $script:LastGdtRetryAfterSeconds = 0
 }
 
 function Register-HddtStopHandler {
@@ -166,6 +183,24 @@ function Wait-GdtRequestSlot {
     }
 }
 
+function Add-HddtProxyParameters {
+    param([hashtable]$Parameters, [Parameter(Mandatory = $true)]$Config)
+    $proxyProperty = $Config.PSObject.Properties['ProxyUri']
+    if ($null -eq $proxyProperty -or $null -eq $proxyProperty.Value) { return }
+    $proxyUri = [Uri]$proxyProperty.Value
+    $Parameters['Proxy'] = $proxyUri
+
+    $usernameProperty = $Config.PSObject.Properties['ProxyUsername']
+    $passwordProperty = $Config.PSObject.Properties['ProxyPassword']
+    $username = if ($null -ne $usernameProperty) { [string]$usernameProperty.Value } else { '' }
+    $password = if ($null -ne $passwordProperty) { [string]$passwordProperty.Value } else { '' }
+    if (-not [string]::IsNullOrWhiteSpace($username)) {
+        $securePassword = ConvertTo-SecureString $password -AsPlainText -Force
+        $Parameters['ProxyCredential'] = New-Object System.Management.Automation.PSCredential($username, $securePassword)
+    }
+    Write-HddtLog DEBUG ('[MẠNG] Dùng proxy {0}:{1}.' -f $proxyUri.Host, $proxyUri.Port)
+}
+
 function Invoke-GdtRequest {
     [CmdletBinding()]
     param(
@@ -186,10 +221,11 @@ function Invoke-GdtRequest {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $attempt = 0
     $rateLimitAttempts = 0
-    $script:LastGdtRequestAttempts = 0
-    $script:LastGdtStatusCode = 0
+    Reset-GdtRequestContext
+    $script:LastGdtRequestUri = [string]$Uri
     while ($true) {
         if (Test-HddtStopRequested) { throw 'Đã dừng theo yêu cầu; không gửi request mới.' }
+        $script:LastGdtRetryAfterSeconds = 0
         try {
             Wait-GdtRequestSlot -Config $Config
             $script:LastGdtRequestUtc = [datetime]::UtcNow
@@ -216,6 +252,7 @@ function Invoke-GdtRequest {
                 WebSession = $script:GdtWebSession
                 ErrorAction = 'Stop'
             }
+            Add-HddtProxyParameters -Parameters $parameters -Config $Config
             # Lưu ý: tham số [string] không truyền vào nhận giá trị '' chứ không phải
             # $null; kiểm tra rỗng để GET/DELETE không bị gửi kèm body (PowerShell
             # báo "Cannot send a content-body with this verb-type").
@@ -256,7 +293,9 @@ function Invoke-GdtRequest {
             $status = Get-HttpStatusCode $_
             $script:LastGdtStatusCode = $status
             $tokenProperty = $Config.PSObject.Properties['Token']
-            $hasCredentials = ($null -ne $tokenProperty -and -not [string]::IsNullOrWhiteSpace([string]$tokenProperty.Value))
+            $usernameProperty = $Config.PSObject.Properties['Username']
+            $passwordProperty = $Config.PSObject.Properties['Password']
+            $hasCredentials = ($null -ne $usernameProperty -and -not [string]::IsNullOrWhiteSpace([string]$usernameProperty.Value) -and $null -ne $passwordProperty -and -not [string]::IsNullOrWhiteSpace([string]$passwordProperty.Value))
             if ($status -eq 401 -or $status -eq 403) {
                 if (-not $hasCredentials -or $SkipAuthorization) {
                     throw "Token hết hạn, không hợp lệ hoặc không có quyền (HTTP $status)."
@@ -290,6 +329,7 @@ function Invoke-GdtRequest {
                     throw ('GDT vẫn giới hạn tốc độ sau {0} lần thử lại. Hãy chờ vài phút hoặc tăng REQUEST_DELAY_MS rồi chạy lại; dữ liệu đã tải vẫn được xuất ra Excel.' -f (Get-429RetryLimit))
                 }
                 $retryAfterSeconds = Get-HttpRetryAfterSeconds $_
+                $script:LastGdtRetryAfterSeconds = $retryAfterSeconds
                 $waitSeconds = Get-RetryDelaySeconds -StatusCode 429 -Attempt $rateLimitAttempts -RetryAfterSeconds $retryAfterSeconds
                 Write-HddtLog WARN ("[MẠNG] HTTP 429; thử lại {0}/{1} sau {2}s (độc lập MAX_RETRIES)." -f $rateLimitAttempts, (Get-429RetryLimit), $waitSeconds)
                 if (Test-HddtStopRequested) { throw 'Đã dừng theo yêu cầu; ngưng thử lại.' }

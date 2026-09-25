@@ -1,5 +1,8 @@
 ﻿[CmdletBinding()]
-param([string]$EnvFile)
+param(
+    [string]$EnvFile,
+    [switch]$Interactive
+)
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
@@ -18,7 +21,14 @@ $loggingStarted = $false
 $stopwatch = [Diagnostics.Stopwatch]::StartNew()
 
 try {
-    $values = Read-DotEnvFile -Path $EnvFile
+    if ($Interactive) {
+        $existingValues = @{}
+        if (Test-Path -LiteralPath $EnvFile -PathType Leaf) { $existingValues = Read-DotEnvFile -Path $EnvFile }
+        $values = Complete-HddtLocalInteractiveValues -Values $existingValues
+    }
+    else {
+        $values = Read-DotEnvFile -Path $EnvFile
+    }
     $sourceDirectoryValue = Get-RequiredEnvValue -Values $values -Name 'LOCAL_XML_DIR'
     $sourceDirectory = Resolve-RepositoryPath -RepositoryRoot $PSScriptRoot -Value $sourceDirectoryValue
     if (-not (Test-Path -LiteralPath $sourceDirectory -PathType Container)) {
@@ -78,8 +88,20 @@ try {
             $errorRows.Add([pscustomobject]@{
                 Direction = $fileDirection
                 Source = 'local-xml'
-                Invoice = $file.FullName
+                SellerTaxCode = ''
+                InvoiceTemplate = ''
+                InvoiceSeries = ''
+                InvoiceNumber = ''
+                InvoiceDate = ''
+                Stage = 'Parse XML'
+                Endpoint = $file.FullName
+                StatusCode = 0
+                Attempts = 0
+                RetryAfterSeconds = 0
+                RecordedAt = [datetime]::Now
                 Error = $_.Exception.Message
+                FinalResult = 'Không tải được'
+                Note = ''
             })
             Write-HddtLog WARN ('[PARSE XML] Không parse được {2} ({0}/{1}): {3}' -f $current, $xmlFiles.Count, $file.Name, $_.Exception.Message)
         }

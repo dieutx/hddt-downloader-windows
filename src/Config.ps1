@@ -24,6 +24,13 @@ function Read-DotEnvFile {
             if (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'"))) {
                 $value = $value.Substring(1, $value.Length - 2)
             }
+            else {
+                # Cho phép inline comment kiểu `.env.example` (sau khoảng trắng),
+                # nhưng không đụng vào dấu # nằm trong mật khẩu/token.
+                $commentIndex = $value.IndexOf(' ;', [StringComparison]::Ordinal)
+                if ($commentIndex -lt 0) { $commentIndex = $value.IndexOf("`t#", [StringComparison]::Ordinal) }
+                if ($commentIndex -ge 0) { $value = $value.Substring(0, $commentIndex).Trim() }
+            }
         }
         if ($name -notmatch '^[A-Z][A-Z0-9_]*$') {
             throw "Tên biến .env không hợp lệ: $name"
@@ -70,14 +77,138 @@ function Resolve-RepositoryPath {
     return [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot $Value))
 }
 
+function Read-HddtInteractiveValue {
+    param([string]$Existing, [string]$Prompt, [string]$Default = '')
+    $effectiveDefault = if ([string]::IsNullOrWhiteSpace($Existing)) { $Default } else { $Existing }
+    $suffix = if ([string]::IsNullOrWhiteSpace($effectiveDefault)) { '' } else { " [$effectiveDefault]" }
+    $answer = Read-Host ($Prompt + $suffix)
+    if ([string]::IsNullOrWhiteSpace([string]$answer)) { return $effectiveDefault }
+    return ([string]$answer).Trim()
+}
+
+function Read-HddtInteractiveSecret {
+    param([string]$Existing, [string]$Prompt)
+    $answer = Read-Host ($Prompt + ' (Enter để giữ giá trị hiện có; CLEAR để xóa)') -AsSecureString
+    if ($null -eq $answer) { return $Existing }
+    if ($answer -isnot [Security.SecureString]) {
+        $plain = [string]$answer
+    }
+    else {
+        $pointer = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($answer)
+        try { $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($pointer) }
+        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($pointer) }
+    }
+    if ([string]::IsNullOrWhiteSpace($plain)) { return $Existing }
+    if ($plain.Trim() -match '^(?i:CLEAR|__CLEAR__)$') { return '' }
+    return $plain
+}
+
+function Read-HddtInteractiveDate {
+    param([string]$Existing, [string]$Prompt, [datetime]$Default)
+    $defaultText = if ([string]::IsNullOrWhiteSpace($Existing)) { $Default.ToString('dd/MM/yyyy') } else { $Existing }
+    while ($true) {
+        $answer = Read-HddtInteractiveValue -Existing $Existing -Prompt $Prompt -Default $defaultText
+        $date = [datetime]::MinValue
+        if ([datetime]::TryParseExact($answer, 'dd/MM/yyyy', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$date)) {
+            return $date.ToString('dd/MM/yyyy')
+        }
+        Write-Host 'Ngày không hợp lệ; nhập theo định dạng dd/MM/yyyy.' -ForegroundColor Yellow
+    }
+}
+
+function Read-HddtInteractiveBoolean {
+    param([string]$Existing, [string]$Prompt, [bool]$Default)
+    $defaultText = if ($Default) { 'true' } else { 'false' }
+    while ($true) {
+        $answer = Read-HddtInteractiveValue -Existing $Existing -Prompt ($Prompt + ' (true/false)') -Default $defaultText
+        try { return (ConvertTo-EnvBoolean $Prompt $answer) }
+        catch { Write-Host 'Chỉ nhập true hoặc false.' -ForegroundColor Yellow }
+    }
+}
+
+function Copy-HddtConfigValues {
+    param([hashtable]$Values)
+    $copy = @{}
+    if ($null -ne $Values) {
+        foreach ($key in $Values.Keys) { $copy[[string]$key] = [string]$Values[$key] }
+    }
+    return $copy
+}
+
+function Complete-HddtInteractiveValues {
+    param([hashtable]$Values)
+    $valuesCopy = Copy-HddtConfigValues $Values
+    $today = Get-Date
+    $defaultFrom = $today.Date.AddDays(1 - $today.Day)
+    $defaultTo = $today.Date
+
+    $token = Read-HddtInteractiveSecret -Existing (Get-EnvValue $valuesCopy 'GDT_TOKEN' '') -Prompt 'GDT_TOKEN (để trống nếu dùng tài khoản)'
+    if (-not [string]::IsNullOrWhiteSpace($token)) {
+        $valuesCopy['GDT_TOKEN'] = $token
+        $valuesCopy['GDT_USERNAME'] = ''
+        $valuesCopy['GDT_PASSWORD'] = ''
+    }
+    else {
+        $valuesCopy['GDT_TOKEN'] = ''
+        $valuesCopy['GDT_USERNAME'] = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'GDT_USERNAME' '') -Prompt 'GDT_USERNAME' -Default ''
+        $valuesCopy['GDT_PASSWORD'] = Read-HddtInteractiveSecret -Existing (Get-EnvValue $valuesCopy 'GDT_PASSWORD' '') -Prompt 'GDT_PASSWORD'
+    }
+
+    $valuesCopy['INVOICE_DIRECTION'] = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'INVOICE_DIRECTION' 'both') -Prompt 'INVOICE_DIRECTION (purchase/sold/both)' -Default 'both'
+    $valuesCopy['FROM_DATE'] = Read-HddtInteractiveDate -Existing (Get-EnvValue $valuesCopy 'FROM_DATE' '') -Prompt 'FROM_DATE' -Default $defaultFrom
+    $valuesCopy['TO_DATE'] = Read-HddtInteractiveDate -Existing (Get-EnvValue $valuesCopy 'TO_DATE' '') -Prompt 'TO_DATE' -Default $defaultTo
+    $valuesCopy['OUTPUT_DIR'] = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'OUTPUT_DIR' 'output') -Prompt 'OUTPUT_DIR' -Default 'output'
+    $valuesCopy['OUTPUT_XLSX'] = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'OUTPUT_XLSX' 'HoaDonDienTu.xlsx') -Prompt 'OUTPUT_XLSX' -Default 'HoaDonDienTu.xlsx'
+
+    $valuesCopy['INCLUDE_REGULAR'] = Read-HddtInteractiveBoolean -Existing (Get-EnvValue $valuesCopy 'INCLUDE_REGULAR' 'true') -Prompt 'INCLUDE_REGULAR' -Default $true
+    $valuesCopy['INCLUDE_SCO'] = Read-HddtInteractiveBoolean -Existing (Get-EnvValue $valuesCopy 'INCLUDE_SCO' 'true') -Prompt 'INCLUDE_SCO' -Default $true
+    $valuesCopy['FETCH_RELATED'] = Read-HddtInteractiveBoolean -Existing (Get-EnvValue $valuesCopy 'FETCH_RELATED' 'true') -Prompt 'FETCH_RELATED' -Default $true
+    $valuesCopy['REDOWNLOAD_XML'] = Read-HddtInteractiveBoolean -Existing (Get-EnvValue $valuesCopy 'REDOWNLOAD_XML' 'false') -Prompt 'REDOWNLOAD_XML' -Default $false
+    $valuesCopy['OVERWRITE_OUTPUT'] = Read-HddtInteractiveBoolean -Existing (Get-EnvValue $valuesCopy 'OVERWRITE_OUTPUT' 'false') -Prompt 'OVERWRITE_OUTPUT' -Default $false
+    $proxyUrl = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'PROXY_URL' '') -Prompt 'PROXY_URL (http://host:port; CLEAR để tắt proxy)' -Default ''
+    if ($proxyUrl.Trim() -match '^(?i:CLEAR|__CLEAR__)$') { $proxyUrl = '' }
+    $valuesCopy['PROXY_URL'] = $proxyUrl
+    if ([string]::IsNullOrWhiteSpace($proxyUrl)) {
+        $valuesCopy['PROXY_USERNAME'] = ''
+        $valuesCopy['PROXY_PASSWORD'] = ''
+    }
+    else {
+        $valuesCopy['PROXY_USERNAME'] = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'PROXY_USERNAME' '') -Prompt 'PROXY_USERNAME (để trống nếu proxy không cần đăng nhập)' -Default ''
+        $valuesCopy['PROXY_PASSWORD'] = Read-HddtInteractiveSecret -Existing (Get-EnvValue $valuesCopy 'PROXY_PASSWORD' '') -Prompt 'PROXY_PASSWORD'
+    }
+    return $valuesCopy
+}
+
+function Complete-HddtLocalInteractiveValues {
+    param([hashtable]$Values)
+    $valuesCopy = Copy-HddtConfigValues $Values
+    $valuesCopy['LOCAL_XML_DIR'] = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'LOCAL_XML_DIR' '') -Prompt 'LOCAL_XML_DIR' -Default ''
+    $valuesCopy['LOCAL_DIRECTION'] = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'LOCAL_DIRECTION' 'auto') -Prompt 'LOCAL_DIRECTION (auto/purchase/sold)' -Default 'auto'
+    $valuesCopy['OUTPUT_DIR'] = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'OUTPUT_DIR' 'output') -Prompt 'OUTPUT_DIR' -Default 'output'
+    $valuesCopy['LOCAL_OUTPUT_XLSX'] = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'LOCAL_OUTPUT_XLSX' 'HoaDonDienTu_Local.xlsx') -Prompt 'LOCAL_OUTPUT_XLSX' -Default 'HoaDonDienTu_Local.xlsx'
+    $valuesCopy['OVERWRITE_OUTPUT'] = Read-HddtInteractiveBoolean -Existing (Get-EnvValue $valuesCopy 'OVERWRITE_OUTPUT' 'false') -Prompt 'OVERWRITE_OUTPUT' -Default $false
+    $valuesCopy['PROGRESS_EVERY'] = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'PROGRESS_EVERY' '1') -Prompt 'PROGRESS_EVERY' -Default '1'
+    $valuesCopy['LOG_LEVEL'] = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'LOG_LEVEL' 'info') -Prompt 'LOG_LEVEL' -Default 'info'
+    $valuesCopy['LOG_TO_FILE'] = Read-HddtInteractiveBoolean -Existing (Get-EnvValue $valuesCopy 'LOG_TO_FILE' 'true') -Prompt 'LOG_TO_FILE' -Default $true
+    return $valuesCopy
+}
+
 function Get-HddtConfig {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)][string]$EnvFile,
-        [Parameter(Mandatory = $true)][string]$RepositoryRoot
+        [Parameter(Mandatory = $true)][string]$RepositoryRoot,
+        [switch]$Interactive
     )
 
-    $values = Read-DotEnvFile -Path $EnvFile
+    if ($Interactive) {
+        $existingValues = @{}
+        if (Test-Path -LiteralPath $EnvFile -PathType Leaf) { $existingValues = Read-DotEnvFile -Path $EnvFile }
+        $values = Complete-HddtInteractiveValues -Values $existingValues
+    }
+    else {
+        $values = Read-DotEnvFile -Path $EnvFile
+    }
 
     # Hai cách đăng nhập: dán sẵn GDT_TOKEN, hoặc điền GDT_USERNAME + GDT_PASSWORD
     # để chương trình tự lấy CAPTCHA và đăng nhập (tương ứng frmDangNhap trong VBA).
@@ -145,11 +276,44 @@ function Get-HddtConfig {
         throw 'OUTPUT_XLSX phải có phần mở rộng .xlsx.'
     }
 
+    $proxyUrl = (Get-EnvValue $values 'PROXY_URL' '').Trim()
+    $proxyUsername = Get-EnvValue $values 'PROXY_USERNAME' ''
+    $proxyPassword = Get-EnvValue $values 'PROXY_PASSWORD' ''
+    # Accept the convenient host:port:username:password form as well as a URL.
+    if ($proxyUrl -notmatch '^[A-Za-z][A-Za-z0-9+.-]*://' -and $proxyUrl -match '^([^:]+):(\d+):([^:]+):(.*)$') {
+        if ([string]::IsNullOrWhiteSpace($proxyUsername)) { $proxyUsername = $Matches[3] }
+        if ([string]::IsNullOrWhiteSpace($proxyPassword)) { $proxyPassword = $Matches[4] }
+        $proxyUrl = 'http://{0}:{1}' -f $Matches[1], $Matches[2]
+    }
+    elseif ($proxyUrl -notmatch '^[A-Za-z][A-Za-z0-9+.-]*://' -and $proxyUrl -match '^([^:]+):(\d+)$') {
+        $proxyUrl = 'http://{0}:{1}' -f $Matches[1], $Matches[2]
+    }
+    $proxyUri = $null
+    if (-not [string]::IsNullOrWhiteSpace($proxyUrl)) {
+        $parsedProxyUri = $null
+        if (-not [Uri]::TryCreate($proxyUrl, [UriKind]::Absolute, [ref]$parsedProxyUri)) {
+            throw 'PROXY_URL không hợp lệ; ví dụ: http://127.0.0.1:8080.'
+        }
+        $proxyUri = $parsedProxyUri
+        if ($proxyUri.Scheme -notin @('http', 'https') -or [string]::IsNullOrWhiteSpace($proxyUri.Host) -or $proxyUri.Port -lt 1) {
+            throw 'PROXY_URL phải là URL http:// hoặc https:// có host và port.'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($proxyUri.UserInfo) -or -not [string]::IsNullOrWhiteSpace($proxyUri.Query) -or -not [string]::IsNullOrWhiteSpace($proxyUri.Fragment)) {
+            throw 'PROXY_URL không được chứa thông tin đăng nhập, query hoặc fragment; dùng PROXY_USERNAME/PROXY_PASSWORD.'
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($proxyUsername) -and -not [string]::IsNullOrWhiteSpace($proxyPassword)) {
+        throw 'PROXY_PASSWORD cần PROXY_USERNAME tương ứng.'
+    }
+
     return [pscustomobject]@{
         Token = $token
         Username = if ($useLogin) { $username.Trim() } else { '' }
         Password = if ($useLogin) { $password } else { '' }
         BaseUrl = 'https://hoadondientu.gdt.gov.vn/api'
+        ProxyUri = $proxyUri
+        ProxyUsername = $proxyUsername
+        ProxyPassword = $proxyPassword
         Directions = $directions
         FromDate = $fromDate
         ToDate = $toDate
