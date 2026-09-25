@@ -1,66 +1,36 @@
-# HDDT Downloader for Windows
+# HDDT Downloader — Tải hóa đơn điện tử GDT bằng PowerShell
 
-Công cụ PowerShell thuần Windows để tải XML hóa đơn điện tử từ GDT và xuất dữ liệu ra Excel `.xlsx`. Không cần cài Python, Node.js, thư viện PowerShell hay Microsoft Excel.
+Tự động tải **XML hóa đơn điện tử** từ `hoadondientu.gdt.gov.vn` và tạo file **Excel `.xlsx`** gồm bảng tổng hợp, chi tiết và báo cáo lỗi. Không cần Microsoft Excel, không cần cài thư viện, không cần nhập CAPTCHA tay.
 
-## Về dự án (About)
+> 💡 **Chỉ cần 3 bước**: cài PowerShell → cấu hình `.env` → chạy `run.cmd`. Xem [Bắt đầu nhanh](#-bắt-đầu-nhanh-windows).
 
-HDDT Downloader for Windows là bản chạy bằng PowerShell của quy trình tải hóa đơn điện tử trên `hoadondientu.gdt.gov.vn`.
+---
 
-- **Cùng logic với dự án Excel VBA [TaiHoaDonDienTu](https://github.com/dieutx/TaiHoaDonDienTu)** của cùng tác giả: cùng endpoint `query`/`sco-query`, cùng cơ chế phân trang theo `state`, retry/backoff theo HTTP 429/500, tải ZIP XML rồi parse ra Excel, cùng logic chuỗi hóa đơn liên quan. Khi dự án VBA cập nhật logic mới, repo này được port theo để giữ hành vi đồng bộ.
-- **Không cần Excel**: workbook `.xlsx` được ghi trực tiếp bằng Open XML, chạy được trên máy chỉ có Windows + PowerShell.
-- **Không hiện hộp thoại CAPTCHA**: tự lấy mã, tự nhận diện và tự đăng nhập, phù hợp chạy lặp theo lịch.
-- Ý tưởng và công cụ Excel VBA ban đầu do thành viên **ongke0711** chia sẻ tại diễn đàn [Giải Pháp Excel](https://www.giaiphapexcel.com/diendan/threads/t%E1%BA%A3i-h%C3%B3a-%C4%91%C6%A1n-%C4%91i%E1%BB%87n-t%E1%BB%AD-https-hoadondientu-gdt-gov-vn-excel-vba.171723/); chi tiết xem tại [TaiHoaDonDienTu](https://github.com/dieutx/TaiHoaDonDienTu).
+## Đây là công cụ gì?
 
-### Bộ công cụ họ Tải dữ liệu thuế điện tử của cùng tác giả
+- **Tải hóa đơn mua vào và bán ra** từ cả hai nguồn `query` (hóa đơn điện tử thường) và `sco-query` (hóa đơn máy tính tiền).
+- **Hai cách đăng nhập**: dán token từ trình duyệt, **hoặc** điền tài khoản + mật khẩu — chương trình tự đọc CAPTCHA và tự đăng nhập lại khi token hết hạn.
+- **Chịu được GDT giới hạn tốc độ**: bị HTTP 429 thì tự chờ dài dần (tối đa 10 phút/lần, 12 lần) rồi tiếp tục, không phải chạy lại từ đầu.
+- **Dừng an toàn bằng Ctrl+C**: dữ liệu đã tải vẫn được ghi ra Excel.
+- Cùng logic với dự án Excel VBA [TaiHoaDonDienTu](https://github.com/dieutx/TaiHoaDonDienTu) (nguồn gốc ý tưởng do thành viên **ongke0711** chia sẻ trên diễn đàn [Giải Pháp Excel](https://www.giaiphapexcel.com/diendan/threads/t%E1%BA%A3i-h%C3%B3a-%C4%91%C6%A1n-%C4%91i%E1%BB%87n-t%E1%BB%AD-https-hoadondientu-gdt-gov-vn-excel-vba.171723/)).
 
-Cùng giải quyết bài toán **tự động hóa khai thác hệ thống thuế điện tử của GDT** (đăng nhập CAPTCHA, tra cứu, tải về) nhưng mỗi công cụ nhắm một hệ thống và một nền tảng:
+### Bộ công cụ "Tải dữ liệu thuế điện tử" của cùng tác giả
+
+Cùng giải bài toán tự động hóa khai thác hệ thống thuế GDT (CAPTCHA, tra cứu, tải về), khác hệ thống và nền tảng:
 
 | Công cụ | Nền tảng | Hệ thống GDT | Dữ liệu tải về |
 |---|---|---|---|
-| **hddt-downloader-windows** (repo này) | PowerShell — Windows | `hoadondientu.gdt.gov.vn` (Hóa đơn điện tử) | XML hóa đơn mua vào/bán ra → Excel |
-| [**tai-ho-so-thue-gtgt**](https://github.com/dieutx/tai-ho-so-thue-gtgt) | Python 3.10+ — Windows/Linux/macOS | `dichvucong.gdt.gov.vn` (Cổng Dịch vụ công, tự chuyển nguồn ETAX trước 01/07/2025 và trang Thuế điện tử cũ) | ZIP tờ khai + metadata CSV/JSON |
-| [**TaiHoaDonDienTu**](https://github.com/dieutx/TaiHoaDonDienTu) | Excel VBA | `hoadondientu.gdt.gov.vn` (Hóa đơn điện tử) | XML hóa đơn → Excel (nguồn gốc của logic) |
+| **repo này** | PowerShell — Windows / Linux / macOS | `hoadondientu.gdt.gov.vn` (Hóa đơn điện tử) | XML hóa đơn mua vào/bán ra → Excel |
+| [tai-ho-so-thue-gtgt](https://github.com/dieutx/tai-ho-so-thue-gtgt) | Python 3.10+ | `dichvucong.gdt.gov.vn` (Cổng Dịch vụ công) | ZIP tờ khai + metadata CSV/JSON |
+| [TaiHoaDonDienTu](https://github.com/dieutx/TaiHoaDonDienTu) | Excel VBA | `hoadondientu.gdt.gov.vn` | XML hóa đơn → Excel (nguồn gốc logic) |
 
-Hai công cụ đầu dùng chung cách tiếp cận: tự nhận dạng CAPTCHA, tự đăng nhập, chia nhỏ khoảng tra cứu theo giới hạn của hệ thống, retry/backoff khi bị giới hạn tốc độ và lưu dữ liệu kèm danh sách chi tiết. Nếu bạn cần cả **hóa đơn** và **tờ khai** thì có thể dùng song song hai công cụ này.
+Dự án cộng đồng, không phải sản phẩm chính thức của cơ quan thuế. Đừng bao giờ commit token, mật khẩu hay dữ liệu hóa đơn thật.
 
-Đây là dự án cộng đồng, không phải sản phẩm chính thức của cơ quan thuế. Không commit token, mật khẩu hay dữ liệu hóa đơn thật vào Git.
+---
 
-## Tính năng nổi bật
+## 🚀 Bắt đầu nhanh (Windows)
 
-- Tải XML hóa đơn mua vào và bán ra từ cả hai nguồn `query` và `sco-query`.
-- Đăng nhập bằng `GDT_TOKEN` **hoặc** bằng tài khoản + mật khẩu với CAPTCHA tự lấy, tự nhận diện.
-- Phân trang theo kỳ tháng, log từng trang (HTTP, số hóa đơn, thời gian phản hồi) và tự dừng khi API trả lại `state` cũ.
-- Tự điều tiết giãn cách request, retry/backoff theo HTTP 429/500/timeout.
-- **Không dừng phiên khi GDT giới hạn tốc độ**: HTTP 429 được thử lại độc lập
-  với `MAX_RETRIES` — tối đa 12 lần với mốc chờ tăng dần 15s → 30s → 60s → ...
-  → 600s (đủ vượt các đợt rate-limit kéo dài vài phút), có tôn trọng header
-  `Retry-After`, và tự đăng nhập lại lấy token mới khi bị 401/403 giữa phiên.
-- Lấy chuỗi hóa đơn thay thế/điều chỉnh và thông tin liên quan; lỗi được ghi ngay tại cột kết quả nếu hết lượt thử.
-- Dừng an toàn bằng Ctrl+C: request hiện tại chạy xong rồi dừng, dữ liệu đã tải vẫn được ghi ra Excel.
-- Xuất workbook 3 sheet (tổng hợp, chi tiết, lỗi); parse thư mục XML có sẵn mà không cần token.
-
-Repo có hai chức năng độc lập:
-
-1. Tải XML từ GDT, sau đó parse và tạo file Excel.
-2. Chỉ parse một thư mục XML đã có sẵn, không gọi GDT và không cần token.
-
-## Cài đặt từ GitHub
-
-Mở **Command Prompt (CMD)** và kiểm tra Git:
-
-```bat
-git --version
-```
-
-Nếu CMD báo không tìm thấy lệnh `git`, cài Git bằng công cụ có sẵn trên Windows 10/11:
-
-```bat
-winget install --id Git.Git -e --source winget
-```
-
-Sau khi cài, đóng CMD, mở lại rồi kiểm tra `git --version`. Nếu máy không có `winget`, tải Git for Windows tại [git-scm.com/download/win](https://git-scm.com/download/win).
-
-Clone và tạo file cấu hình:
+**Bước 1 — Tải code về máy** (mở Command Prompt):
 
 ```bat
 git clone https://github.com/dieutx/hddt-downloader-windows.git
@@ -69,213 +39,189 @@ copy .env.example .env
 notepad .env
 ```
 
-## Chức năng 1: Tải XML từ GDT và tạo Excel
+> Chưa có Git? Chạy `winget install --id Git.Git -e --source winget` rồi mở lại CMD.
 
-### Cách 1: lấy token đăng nhập GDT
+**Bước 2 — Điền `.env`** tối thiểu 5 dòng sau (cách dễ nhất là dùng tài khoản + mật khẩu):
+
+```dotenv
+GDT_USERNAME=0123456789        ; mã số thuế (đăng nhập GDT)
+GDT_PASSWORD=mat_khau          ; mật khẩu — để trống GDT_TOKEN
+FROM_DATE=01/09/2026           ; từ ngày (dd/MM/yyyy)
+TO_DATE=30/09/2026             ; đến ngày
+INVOICE_DIRECTION=both         ; mua vào + bán ra
+```
+
+**Bước 3 — Nhấn đúp `run.cmd`** (hoặc gõ `run.cmd` trong CMD). Xong!
+
+Kết quả nằm trong thư mục `output\`:
+
+```text
+output\
+  HoaDonDienTu.xlsx        ← mở bằng Excel: tổng hợp, chi tiết, lỗi
+  xml\purchase\*.xml       ← XML hóa đơn mua vào
+  xml\sold\*.xml           ← XML hóa đơn bán ra
+  logs\*.log               ← nhật ký chi tiết từng bước
+```
+
+---
+
+## 🐧 Chạy trên Linux / macOS
+
+Mã nguồn là PowerShell thuần nên chạy được trên Linux/macOS với **PowerShell 7 (pwsh)**. Không cần cài thêm thư viện nào khác — mọi thứ (giải nén ZIP, ghi Excel Open XML, gọi HTTPS) đều dùng sẵn trong .NET.
+
+**Bước 1 — Cài PowerShell 7:**
+
+```bash
+# Ubuntu / Debian: cài trực tiếp từ bản phát hành của Microsoft
+curl -sL https://github.com/PowerShell/PowerShell/releases/latest/download/powershell-7.4.6-linux-x64.tar.gz -o /tmp/pwsh.tgz
+sudo mkdir -p /opt/pwsh && sudo tar zxf /tmp/pwsh.tgz -C /opt/pwsh
+sudo chmod +x /opt/pwsh/pwsh && sudo ln -s /opt/pwsh/pwsh /usr/local/bin/pwsh
+pwsh --version    # phải in ra PowerShell 7.4.6
+
+# macOS (Homebrew):
+brew install --cask powershell
+
+# Hoặc theo hướng dẫn chính thức cho các distro khác:
+# https://learn.microsoft.com/vi-vn/powershell/scripting/install/installing-powershell-on-linux
+```
+
+**Bước 2 — Tải code và cấu hình** (giống Windows, chỉ khác lệnh copy):
+
+```bash
+git clone https://github.com/dieutx/hddt-downloader-windows.git
+cd hddt-downloader-windows
+cp .env.example .env
+nano .env        # điền như Bước 2 của Windows ở trên
+```
+
+**Bước 3 — Chạy** (thay `run.cmd` bằng lệnh pwsh):
+
+```bash
+pwsh -NoProfile -File Invoke-Hddt.ps1          # tải hóa đơn từ GDT
+pwsh -NoProfile -File Parse-LocalXml.ps1       # chỉ parse XML có sẵn
+```
+
+**Lưu ý khi chạy trên Linux/macOS:**
+
+- Thư mục đầu ra dùng dấu `/` (ví dụ `OUTPUT_DIR=/home/ban/output`) — hoặc để mặc định `output` là được.
+- File Excel vẫn tạo được bình thường, mở bằng LibreOffice Calc hay Excel đều được.
+- Cần pwsh 7 trở lên (pwsh 5.x chỉ có trên Windows và sẽ không chạy được một số hàm).
+- Đã kiểm tra: toàn bộ test offline và chức năng parse XML chạy xanh trên Ubuntu + PowerShell 7.4.
+
+---
+
+## 🔑 Cách đăng nhập
+
+### Cách 1: Tài khoản + mật khẩu (khuyên dùng — để trống `GDT_TOKEN`)
+
+```dotenv
+GDT_TOKEN=
+GDT_USERNAME=0123456789
+GDT_PASSWORD=mat_khau
+```
+
+Chương trình tự lấy CAPTCHA từ API, tự nhận diện mã (không OCR, không nhập tay) và đăng nhập. CAPTCHA sai thì tự lấy mã mới, thử lại tối đa 3 lần. Nếu giữa phiên bị `401/403` (token hết hạn), chương trình tự đăng nhập lại rồi chạy tiếp — không dừng phiên.
+
+### Cách 2: Dán token từ trình duyệt (khi không muốn để mật khẩu trong `.env`)
 
 1. Đăng nhập tại [hoadondientu.gdt.gov.vn](https://hoadondientu.gdt.gov.vn/).
-2. Khi vẫn đang ở trang GDT, nhấn `F12` và mở tab **Console**.
-3. Dán đoạn JavaScript sau rồi nhấn `Enter`:
+2. Nhấn `F12` → tab **Console** → dán đoạn JavaScript sau rồi nhấn `Enter`:
 
 ```javascript
 const t = (document.cookie.match(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/) || [])[0];
 t ? console.log("Bearer " + t) : console.log("❌ Không tìm thấy token");
 ```
 
-4. Sao chép chuỗi bắt đầu bằng `Bearer ` và điền vào `GDT_TOKEN` trong `.env`:
+3. Sao chép chuỗi bắt đầu bằng `Bearer ` và điền vào `.env`:
 
 ```dotenv
 GDT_TOKEN=Bearer eyJ...
+GDT_USERNAME=
+GDT_PASSWORD=
 ```
 
-Token là thông tin đăng nhập nhạy cảm: chỉ chạy đoạn mã trên đúng website GDT, không gửi token cho người khác và không đưa token vào Git. Nếu báo không tìm thấy token, hãy đăng nhập lại hoặc tải lại trang GDT rồi thử lại.
+> ⚠️ Token là thông tin đăng nhập nhạy cảm: chỉ chạy đoạn mã trên đúng website GDT, không gửi token cho ai. Lỗi 401/403 với token dán tay thì lấy token mới (đăng nhập lại hoặc tải lại trang).
 
-### Cách 2: đăng nhập bằng tài khoản + mật khẩu (tự xử lý CAPTCHA)
+---
 
-Nếu để trống `GDT_TOKEN` và điền cả `GDT_USERNAME` + `GDT_PASSWORD`, chương trình tự:
+## 📋 Chỉnh gì trong `.env`?
 
-1. Gọi `GET /api/captcha` để lấy mã CAPTCHA dạng SVG kèm `key`.
-2. Tự nhận diện mã từ path SVG (không dùng OCR, không cần bạn nhập tay).
-3. Gọi `POST /api/security-taxpayer/authenticate` với `{username, password, cvalue, ckey}` để lấy token.
+### Tải từ GDT (dùng với `run.cmd`)
 
-CAPTCHA sai hoặc mã chưa nhận diện được sẽ tự lấy mã mới và thử lại, tối đa 3 lần. Mật khẩu chỉ giữ trong bộ nhớ của phiên chạy, không ghi vào log hay file Excel.
-
-Điền tối thiểu các dòng sau trong `.env` (chọn một trong hai cách đăng nhập):
-
-```dotenv
-# Cách 1: dán token
-GDT_TOKEN=token_cua_ban
-# Cách 2: tài khoản + mật khẩu (để trống GDT_TOKEN)
-#GDT_USERNAME=0123456789
-#GDT_PASSWORD=mat_khau_tai_khoan_thue
-INVOICE_DIRECTION=purchase
-FROM_DATE=01/09/2026
-TO_DATE=30/09/2026
-INCLUDE_REGULAR=true
-INCLUDE_SCO=true
-FETCH_RELATED=true
-REDOWNLOAD_XML=true
-```
-
-Ý nghĩa các tùy chọn dễ nhầm:
-
-- `INVOICE_DIRECTION=purchase`: lấy hóa đơn mua vào, tức hóa đơn nhà cung cấp xuất cho đơn vị đang tra cứu.
-- `INVOICE_DIRECTION=sold`: lấy hóa đơn bán ra, tức hóa đơn do đơn vị đang tra cứu phát hành.
-- `INVOICE_DIRECTION=both`: lấy cả hóa đơn mua vào và bán ra.
-- `INCLUDE_REGULAR=true`: lấy hóa đơn điện tử thông thường trên hệ thống GDT. Trong API, nguồn này có tên `query`.
-- `INCLUDE_SCO=true`: lấy hóa đơn điện tử khởi tạo từ máy tính tiền. Trong API, nguồn này có tên `sco-query`.
-- `REDOWNLOAD_XML=true`: mỗi lần chạy đều tải lại toàn bộ XML từ GDT và ghi lại file cùng tên nếu đã tồn tại.
-- `REDOWNLOAD_XML=false`: dùng lại XML cùng tên đã có trong thư mục đầu ra và chỉ tải những file còn thiếu.
-- `FETCH_RELATED=true`: gọi thêm API `relative`/`related` để lấy chuỗi hóa đơn thay thế/điều chỉnh và thông tin liên quan cho hóa đơn trạng thái 2-6.
-- `FETCH_RELATED=false`: không gọi API liên quan, chỉ ghi thông tin hóa đơn gốc lấy từ danh sách (không tốn request thêm).
-
-Đóng file Excel đầu ra nếu đang mở, sau đó chạy:
-
-```bat
-run.cmd
-```
-
-Chương trình tải từng hóa đơn và tạo workbook gồm bảng tổng hợp, bảng chi tiết và danh sách lỗi. XML mua vào và bán ra được tách thành hai thư mục; không tạo thư mục riêng cho từng hóa đơn. Dữ liệu ZIP từ API chỉ được giải nén trong bộ nhớ, không lưu thành file `.zip`.
-
-Kết quả mặc định:
-
-```text
-output\
-  HoaDonDienTu.xlsx
-  xml\
-    purchase\
-      purchase_query_MST_MAU_KYHIEU_SO.xml
-    sold\
-      sold_query_MST_MAU_KYHIEU_SO.xml
-  logs\
-    download_YYYYMMDD_HHMMSS.log
-```
-
-## Chức năng 2: Chỉ parse thư mục XML có sẵn
-
-Chức năng này không tải dữ liệu, không gọi API GDT và không sử dụng `GDT_TOKEN`. Chương trình đọc các file `.xml` trong `LOCAL_XML_DIR` và các thư mục con, sau đó tạo một file Excel mới.
-
-Điền trong `.env`:
-
-```dotenv
-LOCAL_XML_DIR=output\xml
-LOCAL_DIRECTION=auto
-LOCAL_OUTPUT_XLSX=HoaDonDienTu_Local.xlsx
-```
-
-Sau đó chạy:
-
-```bat
-parse-local.cmd
-```
-
-`LOCAL_DIRECTION` quyết định cách phân loại XML:
-
-- `auto`: tự nhận diện từng file theo thư mục `purchase`/`sold` hoặc tiền tố tên file. Dùng lựa chọn này khi parse toàn bộ `output\xml`.
-- `purchase`: ép toàn bộ XML trong thư mục thành hóa đơn mua vào.
-- `sold`: ép toàn bộ XML trong thư mục thành hóa đơn bán ra.
-
-Vì vậy có thể đặt `LOCAL_XML_DIR=output\xml` để parse cả hai nhóm trong một lần mà không bị gắn sai loại.
-
-File Excel được tạo trong `OUTPUT_DIR`; mặc định là `output\HoaDonDienTu_Local.xlsx`.
-
-## Toàn bộ tham số trong `.env`
-
-### Dùng khi tải từ GDT
-
-| Biến | Giá trị có thể nhập | Ý nghĩa |
+| Biến | Giá trị | Ý nghĩa |
 |---|---|---|
-| `GDT_TOKEN` | Token thuần hoặc `Bearer ...` | Token đăng nhập GDT; chỉ `run.cmd` sử dụng. |
-| `GDT_USERNAME` | MST/username tài khoản thuế | Để trống `GDT_TOKEN` rồi điền dòng này kèm `GDT_PASSWORD` để tự đăng nhập. |
-| `GDT_PASSWORD` | Mật khẩu tài khoản | Chỉ giữ trong bộ nhớ phiên chạy; không ghi vào log hay Excel. |
-| `INVOICE_DIRECTION` | `purchase`, `sold`, `both` | Chọn mua vào, bán ra hoặc cả hai. |
-| `FROM_DATE` | `dd/MM/yyyy` | Ngày bắt đầu của kỳ hóa đơn. |
-| `TO_DATE` | `dd/MM/yyyy` | Ngày kết thúc của kỳ hóa đơn. |
-| `INCLUDE_REGULAR` | `true`, `false` | Bật/tắt hóa đơn điện tử thông thường (`query`). |
-| `INCLUDE_SCO` | `true`, `false` | Bật/tắt hóa đơn khởi tạo từ máy tính tiền (`sco-query`). |
-| `FETCH_RELATED` | `true`, `false` | Gọi API `relative`/`related` lấy chuỗi hóa đơn liên quan (trạng thái 2-6). |
-| `REDOWNLOAD_XML` | `true`, `false` | `true`: luôn tải lại tất cả XML; `false`: dùng lại XML cùng tên đã có. |
-| `PAGE_SIZE` | Số nguyên dương | Số hóa đơn yêu cầu trong mỗi trang danh sách. |
-| `REQUEST_DELAY_MS` | Số mili giây, ví dụ `600` | Khoảng nghỉ cơ bản giữa hai lần gọi API. |
-| `ADAPTIVE_THROTTLE` | `true`, `false` | Cho phép tự điều chỉnh khoảng nghỉ theo phản hồi của máy chủ. |
-| `MAX_RETRIES` | Số nguyên từ `0` trở lên | Số lần thử lại khi yêu cầu tạm thời thất bại (riêng HTTP 429 được thử lại độc lập, tối đa 12 lần với mốc chờ dài dần — xem phần Mạng). |
-| `HTTP_TIMEOUT_SECONDS` | Số giây | Thời gian chờ tối đa cho một yêu cầu HTTP. |
+| `GDT_TOKEN` / `GDT_USERNAME` + `GDT_PASSWORD` | | Chọn **một** trong hai cách đăng nhập |
+| `FROM_DATE` / `TO_DATE` | `dd/MM/yyyy` | Khoảng ngày lập hóa đơn cần tải |
+| `INVOICE_DIRECTION` | `purchase` / `sold` / `both` | Mua vào / bán ra / cả hai |
+| `INCLUDE_REGULAR` | `true`/`false` | Lấy hóa đơn điện tử thường (nguồn `query`) |
+| `INCLUDE_SCO` | `true`/`false` | Lấy hóa đơn máy tính tiền (nguồn `sco-query`) |
+| `FETCH_RELATED` | `true`/`false` | Lấy thêm chuỗi hóa đơn thay thế/điều chỉnh (trạng thái 2-6) |
+| `REDOWNLOAD_XML` | `true`/`false` | `false` = dùng lại XML đã tải, chỉ tải file còn thiếu |
+| `PAGE_SIZE` | `50` | Số hóa đơn mỗi trang danh sách |
+| `REQUEST_DELAY_MS` | `600` | Nghỉ giữa hai request — **đừng đặt thấp hơn** vì GDT sẽ 429 |
+| `ADAPTIVE_THROTTLE` | `true` | Tự giãn cách khi bị 429, tự nới lỏng khi ổn định |
+| `MAX_RETRIES` | `4` | Retry cho lỗi mạng/5xx (riêng 429 tự retry tới 12 lần) |
+| `HTTP_TIMEOUT_SECONDS` | `90` | Chờ tối đa mỗi request |
 
 ### Đầu ra và log
 
-| Biến | Giá trị có thể nhập | Ý nghĩa |
+| Biến | Giá trị | Ý nghĩa |
 |---|---|---|
-| `OUTPUT_DIR` | Đường dẫn tương đối hoặc tuyệt đối | Thư mục chứa XML, Excel và log. |
-| `OUTPUT_XLSX` | Tên file `.xlsx` | File Excel của chức năng tải và parse. |
-| `OVERWRITE_OUTPUT` | `true`, `false` | Cho phép ghi đè file Excel cùng tên. |
-| `LOG_LEVEL` | `debug`, `info`, `warn`, `error` | Mức chi tiết của log. |
-| `LOG_TO_FILE` | `true`, `false` | Bật/tắt lưu log thành file. |
-| `PROGRESS_EVERY` | Số nguyên dương | In một dòng tiến độ sau mỗi N hóa đơn. |
+| `OUTPUT_DIR` | `output` | Thư mục chứa XML, Excel, log |
+| `OUTPUT_XLSX` | `HoaDonDienTu.xlsx` | Tên file Excel |
+| `OVERWRITE_OUTPUT` | `true` | Ghi đè file Excel cùng tên |
+| `LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
+| `PROGRESS_EVERY` | `1` | In tiến độ mỗi N hóa đơn |
 
-### Dùng khi chỉ parse XML có sẵn
+### Chỉ parse XML có sẵn (dùng với `parse-local.cmd`) — không cần token
 
-| Biến | Giá trị có thể nhập | Ý nghĩa |
+| Biến | Giá trị | Ý nghĩa |
 |---|---|---|
-| `LOCAL_XML_DIR` | Đường dẫn thư mục | Thư mục chứa XML cần parse; có đọc cả thư mục con. |
-| `LOCAL_DIRECTION` | `auto`, `purchase`, `sold` | `auto` nhận diện từng file; hai giá trị còn lại ép toàn bộ thư mục về một loại. |
-| `LOCAL_OUTPUT_XLSX` | Tên file `.xlsx` | Tên file Excel được tạo từ XML có sẵn. |
+| `LOCAL_XML_DIR` | `output\xml` | Thư mục chứa XML (đọc cả thư mục con) |
+| `LOCAL_DIRECTION` | `auto` | `auto` tự nhận diện theo thư mục/tên file; `purchase`/`sold` ép cả thư mục |
+| `LOCAL_OUTPUT_XLSX` | `HoaDonDienTu_Local.xlsx` | Tên file Excel kết quả |
 
-URL API được cố định trong mã nguồn. Authorization header không được gửi tới host khác. Token và mật khẩu không được ghi vào log hoặc workbook.
+---
 
-## Tính năng nâng cao
+## ❓ Các tình huống thường gặp
 
-### Chuỗi hóa đơn liên quan
+**GDT trả 429 liên tục — phải làm gì?**
+Không cần làm gì: chương trình tự chờ 15s → 30s → 60s → ... → 600s (tối đa 12 lần) rồi tiếp tục. Chỉ khi vượt 12 lần thử liên tiếp mới dừng, và dữ liệu đã tải vẫn được xuất ra Excel. Muốn ít bị 429 hơn thì tăng `REQUEST_DELAY_MS`.
 
-Với hóa đơn ở trạng thái 2-6 (thay thế, điều chỉnh, hủy...), chương trình gọi thêm API `relative` và `related` rồi ghi vào các cột riêng của sheet `TongHop`:
+**Tải bị mất điện / Ctrl+C nhầm — chạy lại có bị trùng không?**
+Không: đặt `REDOWNLOAD_XML=false` rồi chạy lại — XML đã có sẽ được dùng lại, chỉ tải hóa đơn còn thiếu.
 
-| Cột | Nội dung |
-|---|---|
-| `RelatedChain` | Chuỗi hóa đơn liên quan, từ hóa đơn mới nhất ngược về hóa đơn đang tra cứu. |
-| `OriginalInvoiceType` | Loại hóa đơn gốc. |
-| `OriginalTemplateCode`, `OriginalSeries`, `OriginalNumber` | Ký hiệu mẫu số, ký hiệu và số hóa đơn gốc. |
-| `OriginalDate` | Ngày lập hóa đơn gốc (`dd/MM/yyyy`). |
-| `OriginalNote` | Ghi chú hóa đơn gốc. |
-| `RelatedInfo` | Thông tin liên quan: thông báo sai sót, tính chất (hủy/điều chỉnh/thay thế), kết quả tiếp nhận của cơ quan thuế. |
+**Cần lại chuỗi hóa đơn bị thay thế/điều chỉnh?**
+Giữ `FETCH_RELATED=true`. Kết quả nằm ở cột `RelatedChain`, `RelatedInfo`, `Original*` trong sheet `TongHop`. Nếu hóa đơn không ở trạng thái 2-6 thì không có gì để lấy, cột sẽ trống.
 
-Nếu đã hết lượt thử vẫn lỗi, thông báo lỗi (kèm số lần thử và HTTP status) được ghi ngay vào cột `RelatedChain` hoặc `RelatedInfo` thay vì bỏ trống. Đặt `FETCH_RELATED=false` để không gọi hai API này.
+**Muốn tạm dừng?**
+Ctrl+C lần 1: request hiện tại chạy xong rồi dừng, dữ liệu vẫn được ghi ra Excel. Ctrl+C lần 2: dừng ngay (không xuất Excel).
 
-### Xử lý HTTP 429 (GDT giới hạn tốc độ)
+**Chỉ có file XML, muốn tạo Excel?**
+Dùng chức năng 2: đặt `LOCAL_XML_DIR` trỏ tới thư mục XML rồi chạy `parse-local.cmd` (Linux: `pwsh -NoProfile -File Parse-LocalXml.ps1`). Không cần token, không gọi GDT.
 
-Khi GDT trả `429 Too Many Requests` liên tiếp, chương trình **không dừng phiên tải**:
+**Chạy trên Linux/macOS được không?**
+Được — cài [PowerShell 7](#-chạy-trên-linux--macos) rồi chạy bằng `pwsh -NoProfile -File Invoke-Hddt.ps1`.
 
-- 429 được thử lại **độc lập với `MAX_RETRIES`** — tối đa 12 lần, mốc chờ tăng dần `15s → 30s → 60s → 120s → 240s → 480s → 600s` (tối đa ~37 phút chờ cộng dồn cho một request).
-- Nếu máy chủ trả header `Retry-After`, giá trị này được ưu tiên dùng làm mốc chờ.
-- Giãn cách request nền (`ADAPTIVE_THROTTLE`) vẫn tự tăng gấp đôi lên tới 10s sau mỗi lần 429, và tự giảm dần khi kết nối ổn định trở lại.
-- Nếu bị `401/403` giữa phiên (token hết hạn) khi dùng đăng nhập tài khoản, chương trình tự đăng nhập lại để lấy token mới rồi tiếp tục, thay vì dừng.
-- Chỉ khi vượt quá 12 lần thử 429 liên tiếp, chương trình mới dừng với thông báo rõ ràng; dữ liệu đã tải vẫn được xuất ra Excel.
+**Báo lỗi 401/403?**
+Token hết hạn hoặc sai tài khoản. Dùng cách đăng nhập tài khoản để chương trình tự đăng nhập lại; hoặc lấy token mới từ trình duyệt.
 
-### Dừng an toàn bằng Ctrl+C
+---
 
-- **Ctrl+C lần 1**: request hiện tại chạy xong rồi dừng; phần dữ liệu đã tải vẫn được ghi ra Excel.
-- **Ctrl+C lần 2**: dừng ngay, không xuất Excel.
-- Nếu dừng khi chưa có dữ liệu nào, chương trình không ghi file để tránh đè kết quả lần chạy trước.
-
-### Quy ước log INFO
-
-Mỗi dòng log INFO có dạng `[THẺ GIAI ĐOẠN] nội dung | chỉ số | thời gian`:
-
-| Thẻ | Giai đoạn |
-|---|---|
-| `CẤU HÌNH` | Đọc `.env`, phạm vi tải |
-| `ĐĂNG NHẬP` | Lấy CAPTCHA, đăng nhập, lấy token |
-| `DANH SÁCH` | Lấy danh sách theo kỳ và từng trang (`query`, `sco-query`) |
-| `TẢI XML` | Tải và parse XML từng hóa đơn |
-| `LIÊN QUAN` | Lấy chuỗi hóa đơn liên quan |
-| `MẠNG` | Giãn cách request, retry, tự điều tiết |
-| `XUẤT FILE` | Ghi workbook |
-| `KẾT QUẢ` | Tổng kết thời gian và số liệu |
-
-Thời gian trong log là thời gian chạy lũy kế của phiên (ví dụ `12.4s` hoặc `00:01:23`).
-
-## Kiểm thử offline
+## 🧪 Kiểm thử offline (không cần token)
 
 ```powershell
+# Windows
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-Tests.ps1
+
+# Linux / macOS
+pwsh -NoProfile -File tests/Run-Tests.ps1
 ```
 
 Test không gọi mạng và không cần token thật.
+
+## Bảo mật
+
+- Mật khẩu chỉ giữ trong bộ nhớ phiên chạy, không ghi vào log hay file Excel.
+- Authorization header chỉ gửi tới host GDT cố định trong mã nguồn.
+- Đừng commit `.env`, token hay dữ liệu hóa đơn thật vào Git (`.env` đã nằm trong `.gitignore`).
