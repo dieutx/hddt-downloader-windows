@@ -3,6 +3,7 @@
 Tự động tải **XML hóa đơn điện tử** từ `hoadondientu.gdt.gov.vn` và tạo file **Excel `.xlsx`** gồm bảng tổng hợp, chi tiết và báo cáo lỗi. Không cần Microsoft Excel, không cần cài thư viện, không cần nhập CAPTCHA tay.
 
 > 💡 **Chỉ cần 3 bước**: cài PowerShell → cấu hình `.env` → chạy `run.cmd`. Xem [Bắt đầu nhanh](#-bắt-đầu-nhanh-windows).
+<img width="945" height="633" alt="image" src="https://github.com/user-attachments/assets/23668d0d-c5bc-48ab-8643-44898c4e61c1" />
 
 ---
 
