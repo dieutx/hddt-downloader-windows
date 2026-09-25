@@ -448,6 +448,42 @@ finally {
     Remove-Item -LiteralPath $tempWrapXlsx -Force -ErrorAction SilentlyContinue
 }
 
+# --- Kiem tra splat: GET/DELETE khong duoc gui body ---
+$script:CapturedSplat = $null
+function Invoke-WebRequest {
+    param($Uri, $Method, $Headers, $TimeoutSec, $UseBasicParsing, $WebSession, $ErrorAction, $Body, $ContentType)
+    $script:CapturedSplat = $PSBoundParameters
+    return [pscustomobject]@{ StatusCode = 200; Content = '{"ok":true}' }
+}
+try {
+    $splatConfig = [pscustomobject]@{
+        BaseUrl = 'https://hoadondientu.gdt.gov.vn/api'
+        Token = 'test-token'
+        RequestDelayMs = 0
+        AdaptiveThrottle = $false
+        MaxRetries = 0
+        HttpTimeoutSeconds = 30
+    }
+    Reset-HddtStopRequest
+
+    Invoke-GdtRequest -Config $splatConfig -Uri ($splatConfig.BaseUrl + '/captcha') -SkipAuthorization | Out-Null
+    Assert-Equal $false ($script:CapturedSplat.ContainsKey('Body')) 'GET does not send a body'
+    Assert-Equal $false ($script:CapturedSplat.ContainsKey('ContentType')) 'GET does not set content type'
+    Assert-Equal 'Get' ([string]$script:CapturedSplat['Method']) 'GET verb'
+    Assert-Equal $false ($script:CapturedSplat['Headers'].ContainsKey('Authorization')) 'Anonymous GET has no Authorization'
+
+    Invoke-GdtRequest -Config $splatConfig -Uri ($splatConfig.BaseUrl + '/security-taxpayer/authenticate') -Method Post -Body '{"username":"x"}' -SkipAuthorization | Out-Null
+    Assert-Equal '{"username":"x"}' ([string]$script:CapturedSplat['Body']) 'POST sends the body'
+    Assert-Equal 'Post' ([string]$script:CapturedSplat['Method']) 'POST verb'
+    Assert-Equal 'application/json' ([string]$script:CapturedSplat['ContentType']) 'POST content type'
+
+    Invoke-GdtRequest -Config $splatConfig -Uri ($splatConfig.BaseUrl + '/captcha') | Out-Null
+    Assert-Equal 'Bearer test-token' ([string]$script:CapturedSplat['Headers']['Authorization']) 'Authorization header uses the token'
+}
+finally {
+    Remove-Item Function:\Invoke-WebRequest -ErrorAction SilentlyContinue
+}
+
 # --- Kiem tra cu phap toan bo script (bat loi encoding/thieu dau) ---
 $scriptPaths = @((Join-Path $root 'Invoke-Hddt.ps1'), (Join-Path $root 'Parse-LocalXml.ps1'))
 $scriptPaths += @(Get-ChildItem -LiteralPath (Join-Path $root 'src') -Filter '*.ps1' | ForEach-Object { $_.FullName })

@@ -205,7 +205,10 @@ function Invoke-GdtRequest {
                 WebSession = $script:GdtWebSession
                 ErrorAction = 'Stop'
             }
-            if ($null -ne $Body) {
+            # Lưu ý: tham số [string] không truyền vào nhận giá trị '' chứ không phải
+            # $null; kiểm tra rỗng để GET/DELETE không bị gửi kèm body (PowerShell
+            # báo "Cannot send a content-body with this verb-type").
+            if (-not [string]::IsNullOrEmpty($Body)) {
                 $parameters['Body'] = $Body
                 $parameters['ContentType'] = $ContentType
             }
