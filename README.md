@@ -96,7 +96,7 @@ sudo chmod +x /opt/pwsh/pwsh && sudo ln -s /opt/pwsh/pwsh /usr/local/bin/pwsh
 pwsh --version    # phải in ra PowerShell 7.4.6
 
 # macOS (Homebrew):
-brew install --cask powershell
+brew install --cask powershell@preview
 
 # Hoặc theo hướng dẫn chính thức cho các distro khác:
 # https://learn.microsoft.com/vi-vn/powershell/scripting/install/installing-powershell-on-linux
