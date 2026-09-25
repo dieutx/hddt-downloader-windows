@@ -19,6 +19,10 @@ HDDT Downloader for Windows là bản chạy bằng PowerShell của quy trình 
 - Đăng nhập bằng `GDT_TOKEN` **hoặc** bằng tài khoản + mật khẩu với CAPTCHA tự lấy, tự nhận diện.
 - Phân trang theo kỳ tháng, log từng trang (HTTP, số hóa đơn, thời gian phản hồi) và tự dừng khi API trả lại `state` cũ.
 - Tự điều tiết giãn cách request, retry/backoff theo HTTP 429/500/timeout.
+- **Không dừng phiên khi GDT giới hạn tốc độ**: HTTP 429 được thử lại độc lập
+  với `MAX_RETRIES` — tối đa 12 lần với mốc chờ tăng dần 15s → 30s → 60s → ...
+  → 600s (đủ vượt các đợt rate-limit kéo dài vài phút), có tôn trọng header
+  `Retry-After`, và tự đăng nhập lại lấy token mới khi bị 401/403 giữa phiên.
 - Lấy chuỗi hóa đơn thay thế/điều chỉnh và thông tin liên quan; lỗi được ghi ngay tại cột kết quả nếu hết lượt thử.
 - Dừng an toàn bằng Ctrl+C: request hiện tại chạy xong rồi dừng, dữ liệu đã tải vẫn được ghi ra Excel.
 - Xuất workbook 3 sheet (tổng hợp, chi tiết, lỗi); parse thư mục XML có sẵn mà không cần token.
@@ -182,7 +186,7 @@ File Excel được tạo trong `OUTPUT_DIR`; mặc định là `output\HoaDonDi
 | `PAGE_SIZE` | Số nguyên dương | Số hóa đơn yêu cầu trong mỗi trang danh sách. |
 | `REQUEST_DELAY_MS` | Số mili giây, ví dụ `600` | Khoảng nghỉ cơ bản giữa hai lần gọi API. |
 | `ADAPTIVE_THROTTLE` | `true`, `false` | Cho phép tự điều chỉnh khoảng nghỉ theo phản hồi của máy chủ. |
-| `MAX_RETRIES` | Số nguyên từ `0` trở lên | Số lần thử lại khi yêu cầu tạm thời thất bại. |
+| `MAX_RETRIES` | Số nguyên từ `0` trở lên | Số lần thử lại khi yêu cầu tạm thời thất bại (riêng HTTP 429 được thử lại độc lập, tối đa 12 lần với mốc chờ dài dần — xem phần Mạng). |
 | `HTTP_TIMEOUT_SECONDS` | Số giây | Thời gian chờ tối đa cho một yêu cầu HTTP. |
 
 ### Đầu ra và log
@@ -222,6 +226,16 @@ Với hóa đơn ở trạng thái 2-6 (thay thế, điều chỉnh, hủy...), 
 | `RelatedInfo` | Thông tin liên quan: thông báo sai sót, tính chất (hủy/điều chỉnh/thay thế), kết quả tiếp nhận của cơ quan thuế. |
 
 Nếu đã hết lượt thử vẫn lỗi, thông báo lỗi (kèm số lần thử và HTTP status) được ghi ngay vào cột `RelatedChain` hoặc `RelatedInfo` thay vì bỏ trống. Đặt `FETCH_RELATED=false` để không gọi hai API này.
+
+### Xử lý HTTP 429 (GDT giới hạn tốc độ)
+
+Khi GDT trả `429 Too Many Requests` liên tiếp, chương trình **không dừng phiên tải**:
+
+- 429 được thử lại **độc lập với `MAX_RETRIES`** — tối đa 12 lần, mốc chờ tăng dần `15s → 30s → 60s → 120s → 240s → 480s → 600s` (tối đa ~37 phút chờ cộng dồn cho một request).
+- Nếu máy chủ trả header `Retry-After`, giá trị này được ưu tiên dùng làm mốc chờ.
+- Giãn cách request nền (`ADAPTIVE_THROTTLE`) vẫn tự tăng gấp đôi lên tới 10s sau mỗi lần 429, và tự giảm dần khi kết nối ổn định trở lại.
+- Nếu bị `401/403` giữa phiên (token hết hạn) khi dùng đăng nhập tài khoản, chương trình tự đăng nhập lại để lấy token mới rồi tiếp tục, thay vì dừng.
+- Chỉ khi vượt quá 12 lần thử 429 liên tiếp, chương trình mới dừng với thông báo rõ ràng; dữ liệu đã tải vẫn được xuất ra Excel.
 
 ### Dừng an toàn bằng Ctrl+C
 

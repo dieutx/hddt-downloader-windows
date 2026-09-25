@@ -45,9 +45,11 @@ $ranges = @(Get-MonthDateRanges -FromDate ([datetime]'2026-08-20') -ToDate ([dat
 Assert-Equal 3 $ranges.Count 'Monthly date range count'
 Assert-Equal ([datetime]'2026-08-31') $ranges[0].To 'First monthly range end'
 Assert-Equal ([datetime]'2026-10-01') $ranges[2].From 'Last monthly range start'
-Assert-Equal 5 (Get-RetryDelaySeconds -StatusCode 429 -Attempt 1) 'First 429 backoff'
-Assert-Equal 20 (Get-RetryDelaySeconds -StatusCode 429 -Attempt 3) 'Third 429 backoff'
+Assert-Equal 15 (Get-RetryDelaySeconds -StatusCode 429 -Attempt 1) 'First 429 backoff'
+Assert-Equal 60 (Get-RetryDelaySeconds -StatusCode 429 -Attempt 3) 'Third 429 backoff'
+Assert-Equal 600 (Get-RetryDelaySeconds -StatusCode 429 -Attempt 8) '429 backoff caps at ten minutes'
 Assert-Equal 45 (Get-RetryDelaySeconds -StatusCode 429 -Attempt 1 -RetryAfterSeconds 45) 'Retry-After precedence'
+Assert-Equal 12 (Get-429RetryLimit) '429 retry limit is independent of MAX_RETRIES'
 
 $originalGdtRequest = ${function:Invoke-GdtRequest}
 $script:IndexRequestCount = 0
@@ -481,6 +483,78 @@ try {
     Assert-Equal 'Bearer test-token' ([string]$script:CapturedSplat['Headers']['Authorization']) 'Authorization header uses the token'
 }
 finally {
+    Remove-Item Function:\Invoke-WebRequest -ErrorAction SilentlyContinue
+}
+
+# --- Kiem tra retry 429: phai thu lai nhieu lan thay vi dung ---
+# Dung WebException voi Response gia (gia lap StatusCode = 429) de
+# Get-HttpStatusCode doc duoc; Start-Sleep duoc thay the de khong cho that.
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections;
+using System.Net;
+namespace HddtTest {
+    public class FakeWebResponse : System.Net.WebResponse {
+        private readonly Uri _uri;
+        private readonly Hashtable _headers;
+        public FakeWebResponse(long statusCode) {
+            _uri = new Uri("https://hoadondientu.gdt.gov.vn/api/test");
+            _headers = new Hashtable();
+            _headers["StatusCode"] = (int)statusCode;
+        }
+        public override Uri ResponseUri { get { return _uri; } }
+        public Hashtable HeadersTable { get { return _headers; } }
+        public int StatusCode { get { return (int)_headers["StatusCode"]; } }
+    }
+
+    public static class FakeWebExceptionFactory {
+        public static WebException Create(WebResponse response) {
+#pragma warning disable SYSLIB0050
+            var exception = (WebException)System.Runtime.Serialization.FormatterServices
+                .GetUninitializedObject(typeof(WebException));
+#pragma warning restore SYSLIB0050
+            var field = typeof(WebException).GetField("_response",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+            if (field != null) { field.SetValue(exception, response); }
+            return exception;
+        }
+    }
+}
+'@
+$script:RateLimitHits = 0
+$script:RateLimitSleptSeconds = @()
+function Invoke-WebRequest {
+    param($Uri, $Method, $Headers, $TimeoutSec, $UseBasicParsing, $WebSession, $ErrorAction, $Body, $ContentType)
+    $script:RateLimitHits++
+    if ($script:RateLimitHits -le 6) {
+        $fakeResponse = New-Object HddtTest.FakeWebResponse (429)
+        $exception = [HddtTest.FakeWebExceptionFactory]::Create($fakeResponse)
+        $errorRecord = New-Object System.Management.Automation.ErrorRecord (
+            $exception, 'Http429', [System.Management.Automation.ErrorCategory]::InvalidOperation, $Uri
+        )
+        throw $errorRecord
+    }
+    return [pscustomobject]@{ StatusCode = 200; Content = '{"ok":true}' }
+}
+try {
+    $rlConfig = [pscustomobject]@{
+        BaseUrl = 'https://hoadondientu.gdt.gov.vn/api'
+        Token = 'test-token'
+        RequestDelayMs = 0
+        AdaptiveThrottle = $false
+        MaxRetries = 4
+        HttpTimeoutSeconds = 30
+    }
+    Reset-HddtStopRequest
+    $script:OriginalSleep = ${function:Start-Sleep}
+    Set-Item Function:\Start-Sleep -Value { param($Seconds) $script:RateLimitSleptSeconds += [int]$Seconds }
+    $result429 = Invoke-GdtRequest -Config $rlConfig -Uri ($rlConfig.BaseUrl + '/invoices/query')
+    Assert-Equal 7 $script:RateLimitHits '429 retries continue until success'
+    Assert-Equal '{"ok":true}' $result429 'Request succeeds after rate-limit window'
+    Assert-Equal 6 @($script:RateLimitSleptSeconds).Count 'Each 429 retry waits with backoff'
+}
+finally {
+    Set-Item Function:\Start-Sleep -Value $script:OriginalSleep
     Remove-Item Function:\Invoke-WebRequest -ErrorAction SilentlyContinue
 }
 

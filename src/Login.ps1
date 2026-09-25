@@ -206,3 +206,11 @@ function Invoke-GdtLogin {
 
     throw ('Đăng nhập thất bại sau {0} lần thử: {1}' -f $MaxAttempts, $lastError)
 }
+
+# Lấy token phiên mới bằng tài khoản đã cấu hình; dùng khi GDT trả 401/403
+# giữa phiên tải (token hết hạn) để tiếp tục thay vì dừng cả lần chạy.
+function Request-GdtSessionToken {
+    [CmdletBinding()]
+    param([Parameter(Mandatory = $true)]$Config)
+    return Invoke-GdtLogin -Config $Config -MaxAttempts 3
+}
