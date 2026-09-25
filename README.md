@@ -84,7 +84,7 @@ Không có table/VBA và không có sheet `MENU`, `Thamkhao` hoặc `LinkTraCuu`
 
 ## 🐧 Chạy trên Linux / macOS
 
-Mã nguồn là PowerShell thuần nên chạy được trên Linux/macOS với **PowerShell 7 (pwsh)**. Không cần cài thêm thư viện nào khác — mọi thứ (giải nén ZIP, ghi Excel Open XML, gọi HTTPS) đều dùng sẵn trong .NET.
+Mã nguồn là PowerShell thuần nên chạy được trên Linux/macOS với **PowerShell 7**. Lệnh ổn định là `pwsh`; gói preview trên macOS cài xong dùng lệnh `pwsh-preview`. Không cần cài thêm thư viện nào khác — mọi thứ (giải nén ZIP, ghi Excel Open XML, gọi HTTPS) đều dùng sẵn trong .NET.
 
 **Bước 1 — Cài PowerShell 7:**
 
@@ -95,8 +95,9 @@ sudo mkdir -p /opt/pwsh && sudo tar zxf /tmp/pwsh.tgz -C /opt/pwsh
 sudo chmod +x /opt/pwsh/pwsh && sudo ln -s /opt/pwsh/pwsh /usr/local/bin/pwsh
 pwsh --version    # phải in ra PowerShell 7.4.6
 
-# macOS (Homebrew):
+# macOS (Homebrew preview):
 brew install --cask powershell@preview
+pwsh-preview --version    # cask preview cài lệnh này, không phải pwsh
 
 # Hoặc theo hướng dẫn chính thức cho các distro khác:
 # https://learn.microsoft.com/vi-vn/powershell/scripting/install/installing-powershell-on-linux
@@ -111,20 +112,27 @@ cp .env.example .env
 nano .env        # điền như Bước 2 của Windows ở trên
 ```
 
-**Bước 3 — Chạy** (thay `run.cmd` bằng lệnh pwsh):
+**Bước 3 — Chạy** (thay `run.cmd` bằng lệnh PowerShell):
 
 ```bash
-pwsh -NoProfile -File Invoke-Hddt.ps1          # tải hóa đơn từ GDT
+# Linux / PowerShell ổn định:
+pwsh -NoProfile -File Invoke-Hddt.ps1
 pwsh -NoProfile -File Invoke-Hddt.ps1 -Interactive  # nhập cấu hình trực tiếp
-pwsh -NoProfile -File Parse-LocalXml.ps1       # chỉ parse XML có sẵn
+pwsh -NoProfile -File Parse-LocalXml.ps1             # chỉ parse XML có sẵn
 pwsh -NoProfile -File Parse-LocalXml.ps1 -Interactive
+
+# macOS preview (sau khi cài powershell@preview):
+pwsh-preview -NoProfile -File Invoke-Hddt.ps1
+pwsh-preview -NoProfile -File Invoke-Hddt.ps1 -Interactive
+pwsh-preview -NoProfile -File Parse-LocalXml.ps1
+pwsh-preview -NoProfile -File Parse-LocalXml.ps1 -Interactive
 ```
 
 **Lưu ý khi chạy trên Linux/macOS:**
 
 - Thư mục đầu ra dùng dấu `/` (ví dụ `OUTPUT_DIR=/home/ban/output`) — hoặc để mặc định `output` là được.
 - File Excel vẫn tạo được bình thường, mở bằng LibreOffice Calc hay Excel đều được.
-- Cần pwsh 7 trở lên (pwsh 5.x chỉ có trên Windows và sẽ không chạy được một số hàm).
+- Cần PowerShell 7 trở lên: dùng `pwsh` cho bản ổn định hoặc `pwsh-preview` cho cask preview trên macOS.
 - Đã kiểm tra: toàn bộ test offline và chức năng parse XML chạy xanh trên Ubuntu + PowerShell 7.4.
 
 ---
@@ -246,10 +254,10 @@ Chương trình ghi lỗi vào `BaoCao_LoiTaiHD`, bỏ qua nguồn/kỳ đó và
 Ctrl+C lần 1: request hiện tại chạy xong rồi dừng, dữ liệu vẫn được ghi ra Excel. Ctrl+C lần 2: dừng ngay (không xuất Excel).
 
 **Chỉ có file XML, muốn tạo Excel?**
-Dùng chức năng 2: đặt `LOCAL_XML_DIR` trỏ tới thư mục XML rồi chạy `parse-local.cmd` (Linux: `pwsh -NoProfile -File Parse-LocalXml.ps1`). Không cần token, không gọi GDT.
+Dùng chức năng 2: đặt `LOCAL_XML_DIR` trỏ tới thư mục XML rồi chạy `parse-local.cmd`. Trên Linux dùng `pwsh -NoProfile -File Parse-LocalXml.ps1`; trên macOS preview dùng `pwsh-preview -NoProfile -File Parse-LocalXml.ps1`. Không cần token, không gọi GDT.
 
 **Chạy trên Linux/macOS được không?**
-Được — cài [PowerShell 7](#-chạy-trên-linux--macos) rồi chạy bằng `pwsh -NoProfile -File Invoke-Hddt.ps1`.
+Được — cài [PowerShell 7](#-chạy-trên-linux--macos) rồi dùng `pwsh` (bản ổn định) hoặc `pwsh-preview` (bản preview trên macOS).
 
 **Báo lỗi 401/403?**
 Token hết hạn hoặc sai tài khoản. Dùng cách đăng nhập tài khoản để chương trình tự đăng nhập lại; hoặc lấy token mới từ trình duyệt.
@@ -262,8 +270,11 @@ Token hết hạn hoặc sai tài khoản. Dùng cách đăng nhập tài khoả
 # Windows
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-Tests.ps1
 
-# Linux / macOS
+# Linux / macOS bản ổn định
 pwsh -NoProfile -File tests/Run-Tests.ps1
+
+# macOS preview
+pwsh-preview -NoProfile -File tests/Run-Tests.ps1
 ```
 
 Test không gọi mạng và không cần token thật.
