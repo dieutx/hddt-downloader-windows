@@ -297,8 +297,14 @@ function Invoke-GdtRequest {
             $passwordProperty = $Config.PSObject.Properties['Password']
             $hasCredentials = ($null -ne $usernameProperty -and -not [string]::IsNullOrWhiteSpace([string]$usernameProperty.Value) -and $null -ne $passwordProperty -and -not [string]::IsNullOrWhiteSpace([string]$passwordProperty.Value))
             if ($status -eq 401 -or $status -eq 403) {
-                if (-not $hasCredentials -or $SkipAuthorization) {
-                    throw "Token hết hạn, không hợp lệ hoặc không có quyền (HTTP $status)."
+                if ($SkipAuthorization) {
+                    if ($Uri -match '/security-taxpayer/authenticate') {
+                        throw "Đăng nhập GDT không thành công (HTTP $status). Kiểm tra GDT_USERNAME/GDT_PASSWORD hoặc quyền truy cập tài khoản."
+                    }
+                    throw "Yêu cầu CAPTCHA không được phép (HTTP $status)."
+                }
+                if (-not $hasCredentials) {
+                    throw "Phiên đăng nhập không hợp lệ (HTTP $status)."
                 }
                 # Đăng nhập bằng tài khoản: tự đăng nhập lại lấy token mới rồi
                 # thử lại request này, thay vì bỏ phiên tải giữa chừng.

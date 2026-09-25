@@ -70,6 +70,12 @@ try {
     $adaptiveText = if ($config.AdaptiveThrottle) { 'bật' } else { 'tắt' }
     $xmlModeText = if ($config.RedownloadXml) { 'tải lại từ đầu' } else { 'tiếp tục/tái sử dụng' }
     Write-HddtLog INFO ('[CẤU HÌNH] Mạng: tuần tự | page size {0} | giãn cách {1} ms | tự điều tiết {2} | retry {3} | timeout {4}s' -f $config.PageSize, $config.RequestDelayMs, $adaptiveText, $config.MaxRetries, $config.HttpTimeoutSeconds)
+    if ($null -ne $config.ProxyUri) {
+        Write-HddtLog INFO ('[CẤU HÌNH] Proxy: {0}:{1}' -f $config.ProxyUri.Host, $config.ProxyUri.Port)
+    }
+    else {
+        Write-HddtLog INFO '[CẤU HÌNH] Proxy: không dùng.'
+    }
     Write-HddtLog INFO ('[CẤU HÌNH] Chế độ XML: {0} | liên quan: {1}.' -f $xmlModeText, $(if ($config.FetchRelated) { 'gọi API' } else { 'chỉ dữ liệu danh sách' }))
     Write-HddtLog INFO ('[CẤU HÌNH] Đầu ra: {0}' -f $config.OutputWorkbook)
     if ($config.LogToFile) { Write-HddtLog INFO ('[CẤU HÌNH] Nhật ký: {0}' -f $logFile) }

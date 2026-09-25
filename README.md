@@ -217,6 +217,7 @@ Xem toàn bộ tuỳ chọn trong `.env.example`.
 ## 8. Lỗi và tạm dừng
 
 - Lỗi HTTP 500/504 hoặc lỗi parse được ghi vào `BaoCao_LoiTaiHD`; chương trình tiếp tục xử lý phần còn lại.
+- Nếu đăng nhập báo HTTP 401, CAPTCHA đã được đọc; hãy kiểm tra `GDT_USERNAME`, `GDT_PASSWORD`, quyền truy cập tài khoản và proxy trong `.env`.
 - Nhấn `Ctrl+C` một lần để dừng sau request hiện tại; dữ liệu đã tải vẫn được xuất Excel.
 - Nếu không lấy được hóa đơn nào, workbook lỗi vẫn được tạo và chương trình trả mã thoát `2`.
 

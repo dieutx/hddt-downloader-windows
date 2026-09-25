@@ -178,6 +178,9 @@ function Invoke-GdtLogin {
         catch {
             if (Test-HddtStopRequested) { throw }
             $lastError = $_.Exception.Message
+            if ($lastError -match '(?i)HTTP 40[13]') {
+                throw ('Đăng nhập GDT thất bại: ' + $lastError + ' Kiểm tra tài khoản, mật khẩu và quyền truy cập GDT.')
+            }
             Write-HddtLog WARN ('[ĐĂNG NHẬP] Chưa thành công ({0}/{1}): {2}' -f $attempt, $MaxAttempts, $lastError)
             continue
         }

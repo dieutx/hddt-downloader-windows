@@ -540,6 +540,20 @@ try {
     Assert-Equal 'secret-password' $authPayload.password 'Login sends password'
     Assert-Equal 'captcha-key-1' $authPayload.ckey 'Login sends captcha key'
     Assert-Equal 'ECT' $authPayload.cvalue 'Login sends decoded captcha'
+
+    $script:LoginCalls = @()
+    $script:LoginAuthBodies = @()
+    Set-Item Function:\Invoke-GdtRequest -Value {
+        param($Config, $Uri, [string]$Method, [string]$Body, [switch]$SkipAuthorization, [hashtable]$ExtraHeaders, [switch]$AsBytes, [string]$ContentType)
+        $script:LoginCalls += [pscustomobject]@{ Uri = $Uri; Method = $Method; Body = $Body }
+        if ($Uri -like '*/captcha') { return (New-TestCaptchaResponse -KeywordIndexes @(19, 4, 2) -Positions @(30, 10, 20)) }
+        throw 'Đăng nhập GDT không thành công (HTTP 401). Kiểm tra GDT_USERNAME/GDT_PASSWORD hoặc quyền truy cập tài khoản.'
+    }
+    $login401Error = ''
+    try { Invoke-GdtLogin -Config $loginConfig | Out-Null }
+    catch { $login401Error = $_.Exception.Message }
+    Assert-Equal $true ($login401Error -match 'HTTP 401') 'Authentication 401 has a clear login error'
+    Assert-Equal 1 @($script:LoginCalls | Where-Object Uri -like '*/authenticate').Count 'Authentication 401 is not retried three times'
 }
 finally { Set-Item Function:\Invoke-GdtRequest -Value $originalLoginRequest }
 
