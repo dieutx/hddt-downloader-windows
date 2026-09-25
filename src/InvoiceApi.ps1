@@ -286,7 +286,11 @@ function ConvertFrom-GdtJsonArray {
     $dataProperty = $null
     if ($null -ne $parsed) { $dataProperty = $parsed.PSObject.Properties['datas'] }
     if ($null -ne $dataProperty -and $null -ne $dataProperty.Value) { return @($dataProperty.Value) }
-    if ($parsed -is [Array]) { return @($parsed) }
+    # JSON gốc là mảng (kể cả mảng một phần tử, pipeline có thể đã unroll) thì
+    # phần tử/đối tượng được trả về phải có các trường của một hóa đơn liên quan;
+    # object bọc "datas" đã xử lý ở trên, còn lại nếu có thuộc tính hóa đơn là
+    # mảng một phần tử đã bị unroll.
+    if ($null -ne $parsed -and $null -ne $parsed.PSObject.Properties['shdon']) { return @($parsed) }
     throw 'Phản hồi API không hợp lệ'
 }
 

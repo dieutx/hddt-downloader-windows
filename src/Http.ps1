@@ -135,12 +135,22 @@ function Get-HttpRetryAfterSeconds {
 function Get-RetryDelaySeconds {
     param([int]$StatusCode, [int]$Attempt, [int]$RetryAfterSeconds = 0)
     if ($StatusCode -eq 429) {
-        $calculated = [Math]::Min(120, 5 * [Math]::Pow(2, $Attempt - 1))
+        # 429 cần chờ dài: đợt rate-limit của GDT thường kéo dài vài phút, nghĩ
+        # ngắn quá là quay lại dập request ngay khi vừa hết giãn cách.
+        $calculated = [Math]::Min(600, 15 * [Math]::Pow(2, $Attempt - 1))
     }
     else {
         $calculated = [Math]::Min(30, [Math]::Pow(2, $Attempt))
     }
     return [int][Math]::Max($calculated, $RetryAfterSeconds)
+}
+
+function Get-429RetryLimit {
+    # Số lần thử lại tối đa cho HTTP 429, độc lập với MAX_RETRIES. Đặt cao để
+    # một đợt rate-limit dài không làm dừng phiên tải: đã gặp phiên dừng sau
+    # 4 lần thử (tổng ~1,5 phút) dù GDT vẫn trả 429 liên tục nhiều phút.
+    # Đặt MAX_RETRIES cao hơn nếu muốn, giới hạn này chỉ là trần tối đa.
+    return 12
 }
 
 function Wait-GdtRequestSlot {
@@ -175,6 +185,7 @@ function Invoke-GdtRequest {
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $attempt = 0
+    $rateLimitAttempts = 0
     $script:LastGdtRequestAttempts = 0
     $script:LastGdtStatusCode = 0
     while ($true) {
@@ -244,28 +255,56 @@ function Invoke-GdtRequest {
         catch {
             $status = Get-HttpStatusCode $_
             $script:LastGdtStatusCode = $status
+            $tokenProperty = $Config.PSObject.Properties['Token']
+            $hasCredentials = ($null -ne $tokenProperty -and -not [string]::IsNullOrWhiteSpace([string]$tokenProperty.Value))
             if ($status -eq 401 -or $status -eq 403) {
-                throw "Token hết hạn, không hợp lệ hoặc không có quyền (HTTP $status)."
+                if (-not $hasCredentials -or $SkipAuthorization) {
+                    throw "Token hết hạn, không hợp lệ hoặc không có quyền (HTTP $status)."
+                }
+                # Đăng nhập bằng tài khoản: tự đăng nhập lại lấy token mới rồi
+                # thử lại request này, thay vì bỏ phiên tải giữa chừng.
+                $attempt++
+                $script:LastGdtRequestAttempts = $attempt
+                Write-HddtLog WARN ('[MẠNG] HTTP {0}; tự đăng nhập lại rồi thử tiếp.' -f $status)
+                try {
+                    $newToken = Request-GdtSessionToken -Config $Config
+                    $Config.Token = $newToken
+                }
+                catch {
+                    throw "Tự đăng nhập lại sau HTTP $status thất bại: $($_.Exception.Message)"
+                }
+                continue
             }
             if ($AsBytes -and $status -eq 500) {
                 # Endpoint export-xml dùng HTTP 500 khi hóa đơn không có hồ sơ
                 # XML gốc. VBA nguồn cũng bỏ qua ngay trường hợp này.
                 throw 'GDT không có hồ sơ XML gốc cho hóa đơn này (HTTP 500).'
             }
-            if ($status -eq 429) { Register-GdtRateLimit $Config }
-
-            $retryable = ($status -eq 0 -or $status -eq 429 -or $status -ge 500)
-            if (-not $retryable -or $attempt -ge $Config.MaxRetries) {
-                if ($status -eq 429) {
-                    throw 'GDT vẫn giới hạn tốc độ (HTTP 429). Hãy chờ vài phút hoặc tăng REQUEST_DELAY_MS rồi chạy lại.'
+            if ($status -eq 429) {
+                Register-GdtRateLimit $Config
+                # 429 được thử lại độc lập với MAX_RETRIES: đợt rate-limit của
+                # GDT có thể kéo dài nhiều phút, phiên tải không nên dừng chỉ
+                # vì hết 4 lần thử ngắn. Trần tối đa là Get-429RetryLimit.
+                $rateLimitAttempts++
+                if ($rateLimitAttempts -gt (Get-429RetryLimit)) {
+                    throw ('GDT vẫn giới hạn tốc độ sau {0} lần thử lại. Hãy chờ vài phút hoặc tăng REQUEST_DELAY_MS rồi chạy lại; dữ liệu đã tải vẫn được xuất ra Excel.' -f (Get-429RetryLimit))
                 }
+                $retryAfterSeconds = Get-HttpRetryAfterSeconds $_
+                $waitSeconds = Get-RetryDelaySeconds -StatusCode 429 -Attempt $rateLimitAttempts -RetryAfterSeconds $retryAfterSeconds
+                Write-HddtLog WARN ("[MẠNG] HTTP 429; thử lại {0}/{1} sau {2}s (độc lập MAX_RETRIES)." -f $rateLimitAttempts, (Get-429RetryLimit), $waitSeconds)
+                if (Test-HddtStopRequested) { throw 'Đã dừng theo yêu cầu; ngưng thử lại.' }
+                Start-Sleep -Seconds $waitSeconds
+                continue
+            }
+
+            $retryable = ($status -eq 0 -or $status -ge 500)
+            if (-not $retryable -or $attempt -ge $Config.MaxRetries) {
                 if ($status -gt 0) { throw "Yêu cầu GDT thất bại (HTTP $status)." }
                 throw "Không kết nối được tới GDT: $($_.Exception.Message)"
             }
 
             $attempt++
-            $retryAfterSeconds = Get-HttpRetryAfterSeconds $_
-            $waitSeconds = Get-RetryDelaySeconds -StatusCode $status -Attempt $attempt -RetryAfterSeconds $retryAfterSeconds
+            $waitSeconds = Get-RetryDelaySeconds -StatusCode $status -Attempt $attempt
             Write-HddtLog WARN ("[MẠNG] HTTP {0}; thử lại {1}/{2} sau {3}s." -f $status, $attempt, $Config.MaxRetries, $waitSeconds)
             if (Test-HddtStopRequested) { throw 'Đã dừng theo yêu cầu; ngưng thử lại.' }
             Start-Sleep -Seconds $waitSeconds
