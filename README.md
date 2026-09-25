@@ -11,6 +11,18 @@ HDDT Downloader for Windows là bản chạy bằng PowerShell của quy trình 
 - **Không hiện hộp thoại CAPTCHA**: tự lấy mã, tự nhận diện và tự đăng nhập, phù hợp chạy lặp theo lịch.
 - Ý tưởng và công cụ Excel VBA ban đầu do thành viên **ongke0711** chia sẻ tại diễn đàn [Giải Pháp Excel](https://www.giaiphapexcel.com/diendan/threads/t%E1%BA%A3i-h%C3%B3a-%C4%91%C6%A1n-%C4%91i%E1%BB%87n-t%E1%BB%AD-https-hoadondientu-gdt-gov-vn-excel-vba.171723/); chi tiết xem tại [TaiHoaDonDienTu](https://github.com/dieutx/TaiHoaDonDienTu).
 
+### Bộ công cụ họ Tải dữ liệu thuế điện tử của cùng tác giả
+
+Cùng giải quyết bài toán **tự động hóa khai thác hệ thống thuế điện tử của GDT** (đăng nhập CAPTCHA, tra cứu, tải về) nhưng mỗi công cụ nhắm một hệ thống và một nền tảng:
+
+| Công cụ | Nền tảng | Hệ thống GDT | Dữ liệu tải về |
+|---|---|---|---|
+| **hddt-downloader-windows** (repo này) | PowerShell — Windows | `hoadondientu.gdt.gov.vn` (Hóa đơn điện tử) | XML hóa đơn mua vào/bán ra → Excel |
+| [**tai-ho-so-thue-gtgt**](https://github.com/dieutx/tai-ho-so-thue-gtgt) | Python 3.10+ — Windows/Linux/macOS | `dichvucong.gdt.gov.vn` (Cổng Dịch vụ công, tự chuyển nguồn ETAX trước 01/07/2025 và trang Thuế điện tử cũ) | ZIP tờ khai + metadata CSV/JSON |
+| [**TaiHoaDonDienTu**](https://github.com/dieutx/TaiHoaDonDienTu) | Excel VBA | `hoadondientu.gdt.gov.vn` (Hóa đơn điện tử) | XML hóa đơn → Excel (nguồn gốc của logic) |
+
+Hai công cụ đầu dùng chung cách tiếp cận: tự nhận dạng CAPTCHA, tự đăng nhập, chia nhỏ khoảng tra cứu theo giới hạn của hệ thống, retry/backoff khi bị giới hạn tốc độ và lưu dữ liệu kèm danh sách chi tiết. Nếu bạn cần cả **hóa đơn** và **tờ khai** thì có thể dùng song song hai công cụ này.
+
 Đây là dự án cộng đồng, không phải sản phẩm chính thức của cơ quan thuế. Không commit token, mật khẩu hay dữ liệu hóa đơn thật vào Git.
 
 ## Tính năng nổi bật
