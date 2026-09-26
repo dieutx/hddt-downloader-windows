@@ -275,6 +275,13 @@ try {
     $zip = [IO.Compression.ZipFile]::OpenRead($tempXlsx)
     try {
         Assert-Equal 1 @($zip.Entries | Where-Object FullName -eq 'xl/workbook.xml').Count 'Workbook package entry'
+        Assert-Equal 1 @($zip.Entries | Where-Object FullName -eq 'xl/styles.xml').Count 'Styles package entry'
+        # Excel không mở được workbook khi thiếu '_rels/.rels' (part quan hệ gốc).
+        Assert-Equal 1 @($zip.Entries | Where-Object FullName -eq '_rels/.rels').Count 'Root relationship package entry'
+        Assert-Equal 0 @($zip.Entries | Where-Object { $_.FullName -match '\\' }).Count 'No package entry keeps a path separator'
+        $rootRelationships = Read-TestZipEntryText $zip '_rels/.rels'
+        Assert-Equal $true ($rootRelationships -match 'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"') 'Root relationship type'
+        Assert-Equal $true ($rootRelationships -match 'Target="xl/workbook.xml"') 'Root relationship points at the workbook part'
         Assert-Equal 7 @($zip.Entries | Where-Object FullName -like 'xl/worksheets/sheet*.xml').Count 'Worksheet package count'
         Assert-Equal 0 @($zip.Entries | Where-Object FullName -like 'xl/tables/table*.xml').Count 'Data-only workbook has no table parts'
         Assert-Equal 0 @($zip.Entries | Where-Object FullName -match 'vbaProject|MENU|Thamkhao|LinkTraCuu').Count 'No VBA or reference sheets are packaged'
@@ -339,6 +346,32 @@ try {
 }
 finally {
     Remove-Item -LiteralPath $tempXlsx -Force -ErrorAction SilentlyContinue
+}
+
+# Gói thiếu thành phần bắt buộc phải bị chặn trước khi ghi đè workbook cũ,
+# thay vì tạo ra file mà Excel không mở được.
+$incompletePackage = Join-Path ([IO.Path]::GetTempPath()) ('hddt-test-' + [guid]::NewGuid().ToString('N') + '.xlsx')
+try {
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $incompleteStream = [IO.File]::Open($incompletePackage, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $incompleteArchive = New-Object IO.Compression.ZipArchive($incompleteStream, [IO.Compression.ZipArchiveMode]::Create, $false)
+        try {
+            $incompleteEntry = $incompleteArchive.CreateEntry('[Content_Types].xml')
+            $incompleteWriter = New-Object IO.StreamWriter($incompleteEntry.Open())
+            try { $incompleteWriter.Write('<Types />') } finally { $incompleteWriter.Dispose() }
+        }
+        finally { $incompleteArchive.Dispose() }
+    }
+    finally { $incompleteStream.Dispose() }
+    $incompletePackageRejected = $false
+    try { Assert-ExcelPackage -Path $incompletePackage -Parts @() }
+    catch { $incompletePackageRejected = $true }
+    Assert-Equal $true $incompletePackageRejected 'Package without the root relationship part is rejected'
+}
+finally {
+    Remove-Item -LiteralPath $incompletePackage -Force -ErrorAction SilentlyContinue
 }
 
 $tempEnv = Join-Path ([IO.Path]::GetTempPath()) ('hddt-test-' + [guid]::NewGuid().ToString('N') + '.env')
