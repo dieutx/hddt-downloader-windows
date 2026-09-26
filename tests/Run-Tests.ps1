@@ -8,6 +8,8 @@ $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $root 'src\XmlParser.ps1')
 . (Join-Path $root 'src\ExcelExporter.ps1')
 . (Join-Path $root 'src\Login.ps1')
+. (Join-Path $root 'src\BrowserProfile.ps1')
+. (Join-Path $root 'src\XmlScheduler.ps1')
 
 function Assert-Equal {
     param($Expected, $Actual, [string]$Message)
@@ -83,7 +85,7 @@ Assert-Equal 12 (Get-429RetryLimit) '429 retry limit is independent of MAX_RETRI
 $originalGdtRequest = ${function:Invoke-GdtRequest}
 $script:IndexRequestCount = 0
 Set-Item Function:\Invoke-GdtRequest -Value {
-    param($Config, $Uri, $AsBytes)
+    param($Config, $Uri, $AsBytes, [string]$RequestProfile)
     $script:IndexRequestCount++
     if ($script:IndexRequestCount -gt 2) { throw 'Pagination did not stop at repeated state.' }
     return '{"datas":[{"nbmst":"test","khhdon":"C26TABC","shdon":"123","khmshdon":"1","tdlap":"2026-09-01"}],"state":"same-state"}'
@@ -103,7 +105,7 @@ finally { Set-Item Function:\Invoke-GdtRequest -Value $originalGdtRequest }
 # Một kỳ lỗi không được làm mất các kỳ còn lại của cùng nguồn.
 $script:PeriodRequestCount = 0
 Set-Item Function:\Invoke-GdtRequest -Value {
-    param($Config, $Uri)
+    param($Config, $Uri, [string]$RequestProfile)
     $script:PeriodRequestCount++
     if ($Uri -match '31%2F08%2F2026') { throw 'simulated period failure' }
     return '{"datas":[],"state":""}'
@@ -125,7 +127,7 @@ finally { Set-Item Function:\Invoke-GdtRequest -Value $originalGdtRequest }
 
 # Phản hồi HTTP 200 nhưng thiếu datas phải được coi là lỗi, không phải trang rỗng.
 Set-Item Function:\Invoke-GdtRequest -Value {
-    param($Config, $Uri)
+    param($Config, $Uri, [string]$RequestProfile)
     return '{"state":""}'
 }
 try {
@@ -614,7 +616,7 @@ $originalLoginRequest = ${function:Invoke-GdtRequest}
 $script:LoginCalls = @()
 $script:LoginAuthBodies = @()
 Set-Item Function:\Invoke-GdtRequest -Value {
-    param($Config, $Uri, [string]$Method, [string]$Body, [switch]$SkipAuthorization, [hashtable]$ExtraHeaders, [switch]$AsBytes, [string]$ContentType)
+    param($Config, $Uri, [string]$Method, [string]$Body, [switch]$SkipAuthorization, [hashtable]$ExtraHeaders, [switch]$AsBytes, [string]$ContentType, [string]$RequestProfile)
     $script:LoginCalls += [pscustomobject]@{ Uri = $Uri; Method = $Method; Body = $Body }
     if ($Uri -like '*/captcha') {
         return (New-TestCaptchaResponse -KeywordIndexes @(19, 4, 2) -Positions @(30, 10, 20))
@@ -650,7 +652,7 @@ try {
     $script:LoginCalls = @()
     $script:LoginAuthBodies = @()
     Set-Item Function:\Invoke-GdtRequest -Value {
-        param($Config, $Uri, [string]$Method, [string]$Body, [switch]$SkipAuthorization, [hashtable]$ExtraHeaders, [switch]$AsBytes, [string]$ContentType)
+        param($Config, $Uri, [string]$Method, [string]$Body, [switch]$SkipAuthorization, [hashtable]$ExtraHeaders, [switch]$AsBytes, [string]$ContentType, [string]$RequestProfile)
         $script:LoginCalls += [pscustomobject]@{ Uri = $Uri; Method = $Method; Body = $Body }
         if ($Uri -like '*/captcha') { return (New-TestCaptchaResponse -KeywordIndexes @(19, 4, 2) -Positions @(30, 10, 20)) }
         throw 'Đăng nhập GDT không thành công (HTTP 401). Kiểm tra GDT_USERNAME/GDT_PASSWORD hoặc quyền truy cập tài khoản.'
@@ -670,7 +672,7 @@ $script:RelationFailRelative = $false
 $script:RelativeResponse = '[{"khmshdon":"1","khhdon":"C26TABC","shdon":"100","khmshdgoc":"1","khhdgoc":"C26TOLD","shdgoc":"50","tthai":2}]'
 $script:RelatedResponse = '{"mtthdtbssrs":[{"ten":"Thông báo hóa đơn","ngay":"2026-09-02T00:00:00","ldo":"sai sót kinh doanh","loai":"3","kqtnhan":"1"}]}'
 Set-Item Function:\Invoke-GdtRequest -Value {
-    param($Config, $Uri, [string]$Method, [string]$Body, [switch]$SkipAuthorization, [hashtable]$ExtraHeaders, [switch]$AsBytes, [string]$ContentType)
+    param($Config, $Uri, [string]$Method, [string]$Body, [switch]$SkipAuthorization, [hashtable]$ExtraHeaders, [switch]$AsBytes, [string]$ContentType, [string]$RequestProfile)
     $script:RelationUris += $Uri
     if ($Uri -like '*/invoices/relative?*') {
         if ($script:RelationFailRelative) { throw 'Yeu cau GDT that bai (HTTP 500).' }
@@ -923,6 +925,772 @@ try {
 finally {
     Set-Item Function:\Start-Sleep -Value $script:OriginalSleep
     Remove-Item Function:\Invoke-WebRequest -ErrorAction SilentlyContinue
+}
+
+# =============================================================================
+# Nang cap: tai XML song song co kiem soat + HTTP profile theo trinh duyet
+# =============================================================================
+
+# --- Cau hinh moi: XML_CONCURRENCY, XML_MAX_CONCURRENCY, XML_REQUEST_INTERVAL_MS ---
+$baseEnvLines = @(
+    'GDT_USERNAME=tester'
+    'GDT_PASSWORD=secret-password'
+    'INVOICE_DIRECTION=purchase'
+    'FROM_DATE=01/09/2026'
+    'TO_DATE=30/09/2026'
+    'OUTPUT_DIR=output'
+    'OUTPUT_XLSX=test.xlsx'
+)
+$tempNewEnvFiles = New-Object System.Collections.Generic.List[string]
+function New-TestEnvFile {
+    param([string[]]$ExtraLines = @())
+    $path = Join-Path ([IO.Path]::GetTempPath()) ('hddt-test-' + [guid]::NewGuid().ToString('N') + '.env')
+    $lines = @($baseEnvLines) + @($ExtraLines)
+    [IO.File]::WriteAllLines($path, [string[]]$lines, (New-Object Text.UTF8Encoding($false)))
+    $script:tempNewEnvFiles.Add($path)
+    return $path
+}
+function Test-TestEnvRejected {
+    param([string[]]$ExtraLines = @())
+    $path = New-TestEnvFile -ExtraLines $ExtraLines
+    $rejected = $false
+    try { Get-HddtConfig -EnvFile $path -RepositoryRoot $root | Out-Null }
+    catch { $rejected = $true }
+    return $rejected
+}
+try {
+    $defaultNewConfig = Get-HddtConfig -EnvFile (New-TestEnvFile) -RepositoryRoot $root
+    Assert-Equal 2 $defaultNewConfig.XmlConcurrency 'XML_CONCURRENCY defaults to 2'
+    Assert-Equal 3 $defaultNewConfig.XmlMaxConcurrency 'XML_MAX_CONCURRENCY defaults to 3'
+    Assert-Equal 800 $defaultNewConfig.XmlRequestIntervalMs 'XML_REQUEST_INTERVAL_MS defaults to 800'
+    Assert-Equal '' $defaultNewConfig.BrowserUserAgent 'BROWSER_USER_AGENT defaults to empty'
+    Assert-Equal $false $defaultNewConfig.LogHttpProfile 'LOG_HTTP_PROFILE defaults to false'
+
+    $customNewConfig = Get-HddtConfig -EnvFile (New-TestEnvFile -ExtraLines @(
+        'XML_CONCURRENCY=4'
+        'XML_MAX_CONCURRENCY=6'
+        'XML_REQUEST_INTERVAL_MS=250'
+        'BROWSER_USER_AGENT=TestAgent/1.0'
+        'LOG_HTTP_PROFILE=true'
+    )) -RepositoryRoot $root
+    Assert-Equal 4 $customNewConfig.XmlConcurrency 'XML_CONCURRENCY parsed from .env'
+    Assert-Equal 6 $customNewConfig.XmlMaxConcurrency 'XML_MAX_CONCURRENCY parsed from .env'
+    Assert-Equal 250 $customNewConfig.XmlRequestIntervalMs 'XML_REQUEST_INTERVAL_MS parsed from .env'
+    Assert-Equal 'TestAgent/1.0' $customNewConfig.BrowserUserAgent 'BROWSER_USER_AGENT parsed from .env'
+    Assert-Equal $true $customNewConfig.LogHttpProfile 'LOG_HTTP_PROFILE parsed from .env'
+
+    Assert-Equal $true (Test-TestEnvRejected @('XML_CONCURRENCY=5', 'XML_MAX_CONCURRENCY=3')) 'XML_CONCURRENCY above XML_MAX_CONCURRENCY is rejected'
+    Assert-Equal $true (Test-TestEnvRejected @('XML_CONCURRENCY=0')) 'XML_CONCURRENCY below 1 is rejected'
+    Assert-Equal $true (Test-TestEnvRejected @('XML_CONCURRENCY=11')) 'XML_CONCURRENCY above 10 is rejected'
+    Assert-Equal $true (Test-TestEnvRejected @('XML_MAX_CONCURRENCY=0')) 'XML_MAX_CONCURRENCY below 1 is rejected'
+    Assert-Equal $true (Test-TestEnvRejected @('XML_REQUEST_INTERVAL_MS=60001')) 'XML_REQUEST_INTERVAL_MS range is enforced'
+    Assert-Equal $true (Test-TestEnvRejected @('LOG_HTTP_PROFILE=maybe')) 'LOG_HTTP_PROFILE must be a boolean'
+}
+finally {
+    foreach ($envPath in $tempNewEnvFiles) { Remove-Item -LiteralPath $envPath -Force -ErrorAction SilentlyContinue }
+}
+
+# --- Get-HddtConfigValue doc an toan object cau hinh thieu truong ---
+$stubConfigObject = [pscustomobject]@{ Token = 'abc'; EmptyText = ''; NullText = $null }
+Assert-Equal 'abc' (Get-HddtConfigValue $stubConfigObject 'Token' 'def') 'Existing config value is read'
+Assert-Equal 'def' (Get-HddtConfigValue $stubConfigObject 'MissingText' 'def') 'Missing config property returns default'
+Assert-Equal '' (Get-HddtConfigValue $stubConfigObject 'EmptyText' 'def') 'Empty config value is kept'
+Assert-Equal 'def' (Get-HddtConfigValue $stubConfigObject 'NullText' 'def') 'Null config value returns default'
+Assert-Equal 'def' (Get-HddtConfigValue $null 'Token' 'def') 'Null config object returns default'
+
+# --- Browser profile: mot UA, client hint dong bo, khong random ---
+Reset-GdtBrowserProfile
+Assert-Equal $true ((Get-GdtBrowserUserAgent -Config ([pscustomobject]@{})) -like 'Mozilla/5.0*') 'Default user agent is a browser UA'
+Assert-Equal $true ((Get-GdtBrowserUserAgent -Config $null) -like 'Mozilla/5.0*') 'Missing config falls back to default UA'
+Assert-Equal 'ConfigAgent/1.0' (Get-GdtBrowserUserAgent -Config ([pscustomobject]@{ BrowserUserAgent = 'ConfigAgent/1.0' })) 'Config overrides the user agent'
+
+Reset-GdtBrowserProfile
+$profileA = Get-GdtBrowserProfile -Config ([pscustomobject]@{ BrowserUserAgent = 'AgentA/1.0' })
+$profileB = Get-GdtBrowserProfile -Config ([pscustomobject]@{ BrowserUserAgent = 'AgentA/1.0' })
+Assert-Equal $true ([object]::ReferenceEquals($profileA, $profileB)) 'Same UA reuses one profile object per run'
+$profileC = Get-GdtBrowserProfile -Config ([pscustomobject]@{ BrowserUserAgent = 'AgentB/1.0' })
+Assert-Equal $false ([object]::ReferenceEquals($profileA, $profileC)) 'Different UA creates a new profile'
+
+$edgeProfile = New-GdtBrowserProfile -UserAgent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 Edg/126.0.0.0'
+Assert-Equal $true ($edgeProfile.SecChUa -like '*"Microsoft Edge";v="126"*') 'Edge client hint matches the UA major version'
+$chromeProfile = New-GdtBrowserProfile -UserAgent 'Mozilla/5.0 (Windows NT 10.0) Chrome/130.0.0.0 Safari/537.36'
+Assert-Equal $true ($chromeProfile.SecChUa -like '*"Google Chrome";v="130"*') 'Chrome client hint matches the UA major version'
+$genericProfile = New-GdtBrowserProfile -UserAgent 'Custom/1.0'
+Assert-Equal $true ($genericProfile.SecChUa -like '*Chromium*') 'Unknown UA still produces a usable client hint'
+Assert-Equal '"Windows"' $genericProfile.SecChUaPlatform 'Client hint platform is Windows'
+Assert-Equal '?0' $genericProfile.SecChUaMobile 'Client hint mobile flag is 0'
+Assert-Equal $true ($genericProfile.AcceptLanguage -like 'vi-VN*') 'Locale prefers Vietnamese'
+Assert-Equal 'https://hoadondientu.gdt.gov.vn/' $genericProfile.RootReferer 'Root referer is the GDT home page'
+Assert-Equal 'https://hoadondientu.gdt.gov.vn/tra-cuu/tra-cuu-hoa-don' $genericProfile.LookupReferer 'Lookup referer is the tra cuu page'
+
+# --- Suy ra request profile tu URI ---
+Assert-Equal 'Captcha' (Resolve-GdtRequestProfile -Uri 'https://hoadondientu.gdt.gov.vn/api/captcha') 'Captcha profile from URI'
+Assert-Equal 'Login' (Resolve-GdtRequestProfile -Uri 'https://hoadondientu.gdt.gov.vn/api/security-taxpayer/authenticate') 'Login profile from URI'
+Assert-Equal 'ExportXml' (Resolve-GdtRequestProfile -Uri 'https://hoadondientu.gdt.gov.vn/api/query/invoices/export-xml?nbmst=1') 'ExportXml profile from URI'
+Assert-Equal 'InvoiceRelation' (Resolve-GdtRequestProfile -Uri 'https://hoadondientu.gdt.gov.vn/api/query/invoices/relative?x=1') 'Relative profile from URI'
+Assert-Equal 'InvoiceRelation' (Resolve-GdtRequestProfile -Uri 'https://hoadondientu.gdt.gov.vn/api/query/invoices/related?x=1') 'Related profile from URI'
+Assert-Equal 'InvoiceQuery' (Resolve-GdtRequestProfile -Uri 'https://hoadondientu.gdt.gov.vn/api/query/invoices?size=50') 'Query profile is the default'
+Assert-Equal 'InvoiceQuery' (Resolve-GdtRequestProfile -Uri 'https://hoadondientu.gdt.gov.vn/api/sco-query/invoices?size=50') 'SCO query keeps the JSON profile'
+Assert-Equal 'ExportXml' (Resolve-GdtRequestProfile -Uri 'https://hoadondientu.gdt.gov.vn/api/query/invoices?x=1' -RequestProfile 'ExportXml') 'Explicit profile wins over URI inference'
+
+# --- Header theo tung endpoint ---
+Reset-GdtBrowserProfile
+$headerConfig = [pscustomobject]@{ BrowserUserAgent = 'UnitTestAgent/1.0'; LogHttpProfile = $false }
+$captchaHeaders = Get-GdtRequestHeaders -RequestProfile 'Captcha' -Config $headerConfig
+Assert-Equal 'UnitTestAgent/1.0' $captchaHeaders['User-Agent'] 'User-Agent comes from the browser profile'
+Assert-Equal $true ($captchaHeaders['Accept'] -like 'application/json*') 'Captcha profile accepts JSON'
+Assert-Equal 'https://hoadondientu.gdt.gov.vn/' $captchaHeaders['Referer'] 'Captcha refers to the root page'
+Assert-Equal $false ($captchaHeaders.ContainsKey('Origin')) 'Captcha sends no Origin'
+Assert-Equal $false ($captchaHeaders.ContainsKey('Authorization')) 'Empty token sends no Authorization header'
+
+$loginHeaders = Get-GdtRequestHeaders -RequestProfile 'Login' -Config $headerConfig
+Assert-Equal 'https://hoadondientu.gdt.gov.vn' $loginHeaders['Origin'] 'Login sends Origin'
+Assert-Equal 'https://hoadondientu.gdt.gov.vn/' $loginHeaders['Referer'] 'Login refers to the root page'
+
+$queryHeaders = Get-GdtRequestHeaders -RequestProfile 'InvoiceQuery' -Config $headerConfig -AuthorizationToken 'tok-1'
+Assert-Equal 'https://hoadondientu.gdt.gov.vn/tra-cuu/tra-cuu-hoa-don' $queryHeaders['Referer'] 'Query refers to the tra cuu page'
+Assert-Equal 'Bearer tok-1' $queryHeaders['Authorization'] 'Bearer token is attached'
+Assert-Equal 'cors' $queryHeaders['Sec-Fetch-Mode'] 'Query uses cors fetch mode'
+Assert-Equal $true ($queryHeaders.ContainsKey('sec-ch-ua')) 'Client hint is present'
+Assert-Equal $true ($queryHeaders.ContainsKey('Request-Id') -eq $false) 'Request-Id is added per request, not per profile'
+
+$exportHeaders = Get-GdtRequestHeaders -RequestProfile 'ExportXml' -Config $headerConfig -AuthorizationToken 'tok-1'
+Assert-Equal $true ($exportHeaders['Accept'] -like '*application/zip*') 'Export profile accepts zip downloads'
+Assert-Equal 'https://hoadondientu.gdt.gov.vn/tra-cuu/tra-cuu-hoa-don' $exportHeaders['Referer'] 'Export refers to the tra cuu page'
+
+$relationHeaders = Get-GdtRequestHeaders -RequestProfile 'InvoiceRelation' -Config $headerConfig `
+    -AdditionalHeaders (Get-GdtRelationHeaders -EndpointName 'relative' -Source 'query' -Direction 'purchase')
+Assert-Equal $true ($relationHeaders.ContainsKey('Action')) 'Relation request keeps the Action header'
+Assert-Equal '/tra-cuu/tra-cuu-hoa-don' $relationHeaders['End-Point'] 'Relation request keeps the End-Point header'
+Assert-Equal 'vi' $relationHeaders['Accept-Language'] 'Endpoint Accept-Language overrides the profile'
+Assert-Equal $true ($relationHeaders['Referer'] -like 'https://hoadondientu.gdt.gov.vn*') 'Relation Referer stays on the GDT origin'
+Assert-Equal 'UnitTestAgent/1.0' $relationHeaders['User-Agent'] 'Endpoint headers keep the shared user agent'
+
+# --- Log profile: chi ghi header an toan, khong bao gio log Authorization ---
+$originalProfileLog = ${function:Write-HddtLog}
+$script:CapturedProfileLogLines = @()
+try {
+    Set-Item Function:\Write-HddtLog -Value { param($Level = 'INFO', $Message) $script:CapturedProfileLogLines += [string]$Message }
+    Reset-GdtBrowserProfile
+    $logEnabledConfig = [pscustomobject]@{ BrowserUserAgent = 'LogAgent/1.0'; LogHttpProfile = $true }
+    $null = Get-GdtRequestHeaders -RequestProfile 'InvoiceQuery' -Config $logEnabledConfig -AuthorizationToken 'secret-token-value'
+    Assert-Equal $true (@($script:CapturedProfileLogLines | Where-Object { $_ -match 'profile=InvoiceQuery' }).Count -eq 1) 'Header log emitted when LOG_HTTP_PROFILE=true'
+    Assert-Equal $true (@($script:CapturedProfileLogLines | Where-Object { $_ -match 'LogAgent/1.0' }).Count -ge 1) 'User-Agent is logged for diagnosis'
+    Assert-Equal 0 (@($script:CapturedProfileLogLines | Where-Object { $_ -match 'secret-token-value' }).Count) 'Authorization value never reaches the log'
+    Assert-Equal 0 (@($script:CapturedProfileLogLines | Where-Object { $_ -match '(?i)authorization' }).Count) 'Authorization header name never reaches the log'
+    Assert-Equal 0 (@($script:CapturedProfileLogLines | Where-Object { $_ -match '(?i)cookie' }).Count) 'Cookie never reaches the log'
+
+    $script:CapturedProfileLogLines = @()
+    $logDisabledConfig = [pscustomobject]@{ BrowserUserAgent = 'QuietAgent/1.0'; LogHttpProfile = $false }
+    $null = Get-GdtRequestHeaders -RequestProfile 'InvoiceQuery' -Config $logDisabledConfig
+    Assert-Equal 0 $script:CapturedProfileLogLines.Count 'No header log when LOG_HTTP_PROFILE=false'
+}
+finally {
+    Set-Item Function:\Write-HddtLog -Value $originalProfileLog
+    Reset-GdtBrowserProfile
+}
+
+# --- Khong con UA legacy / Accept-Encoding / Connection trong src ---
+foreach ($srcFile in @(Get-ChildItem -LiteralPath (Join-Path $root 'src') -Filter '*.ps1')) {
+    $srcContent = [IO.File]::ReadAllText($srcFile.FullName)
+    Assert-Equal 0 ([regex]::Matches($srcContent, 'HDDT-Windows-PowerShell').Count) ('Legacy user agent removed from ' + $srcFile.Name)
+    Assert-Equal 0 ([regex]::Matches($srcContent, "Accept-Encoding").Count) ('Accept-Encoding left to the transport in ' + $srcFile.Name)
+    Assert-Equal 0 ([regex]::Matches($srcContent, "'Connection'").Count) ('Connection header not forced in ' + $srcFile.Name)
+}
+
+# --- Bo dieu tiet tai XML: slot, khoang cach, cooldown, phuc hoi ---
+function New-TestXmlConfig {
+    param([int]$Concurrency = 2, [int]$MaxConcurrency = 3, [int]$IntervalMs = 0)
+    return [pscustomobject]@{
+        BaseUrl = 'https://hoadondientu.gdt.gov.vn/api'
+        Token = 'test-token'
+        Username = 'tester'
+        Password = 'secret-password'
+        RequestDelayMs = 0
+        AdaptiveThrottle = $false
+        MaxRetries = 2
+        HttpTimeoutSeconds = 30
+        ProgressEvery = 1
+        LogLevel = 'info'
+        XmlConcurrency = $Concurrency
+        XmlMaxConcurrency = $MaxConcurrency
+        XmlRequestIntervalMs = $IntervalMs
+        BrowserUserAgent = ''
+        LogHttpProfile = $false
+        RedownloadXml = $false
+        XmlDirectory = ([IO.Path]::GetTempPath())
+    }
+}
+
+$throttleConfig = New-TestXmlConfig -Concurrency 2 -MaxConcurrency 3 -IntervalMs 0
+$originalThrottleLog = ${function:Write-HddtLog}
+$script:CapturedThrottleLogs = @()
+try {
+    Set-Item Function:\Write-HddtLog -Value { param($Level = 'INFO', $Message) $script:CapturedThrottleLogs += [string]$Message }
+    Reset-HddtStopRequest
+    $null = New-HddtXmlSharedState -Config $throttleConfig
+
+    $snapshot = Get-GdtXmlThrottleSnapshot
+    Assert-Equal 2 $snapshot.BaseConcurrency 'Base concurrency from XML_CONCURRENCY'
+    Assert-Equal 3 $snapshot.MaxConcurrency 'Max concurrency from XML_MAX_CONCURRENCY'
+    Assert-Equal 2 $snapshot.CurrentConcurrency 'Initial concurrency equals XML_CONCURRENCY'
+    Assert-Equal 0 $snapshot.ActiveCount 'No slot held initially'
+    Assert-Equal 0 $snapshot.PeakConcurrency 'Peak concurrency starts at zero'
+
+    # Giu dung so ket noi cho phep; phia sau bi chan ngay khi khong choi.
+    Assert-Equal $true (Enter-GdtXmlRequestSlot -Config $throttleConfig) 'First slot acquired'
+    Assert-Equal $true (Enter-GdtXmlRequestSlot -Config $throttleConfig) 'Second slot acquired up to XML_CONCURRENCY'
+    Assert-Equal $false (Enter-GdtXmlRequestSlot -Config $throttleConfig -TryOnly) 'Third slot refused at the initial cap'
+    Assert-Equal 2 (Get-GdtXmlThrottleSnapshot).ActiveCount 'Two slots are held'
+    Exit-GdtXmlRequestSlot -ResponseTimeMs 120
+    Exit-GdtXmlRequestSlot
+    $snapshot = Get-GdtXmlThrottleSnapshot
+    Assert-Equal 0 $snapshot.ActiveCount 'Both slots released'
+    Assert-Equal 2 $snapshot.PeakConcurrency 'Peak concurrency recorded'
+    Assert-Equal 1 $snapshot.CompletedCount 'Only a successful response time is counted'
+    Assert-Equal 120 $snapshot.TotalResponseTimeMs 'Response time total accumulates'
+
+    # Phuc hoi day concurrency len muc toi da; khong vuot qua XML_MAX_CONCURRENCY.
+    Set-HddtSharedValue -Key 'XmlCurrentConcurrency' -Value 3
+    Enter-GdtXmlRequestSlot -Config $throttleConfig | Out-Null
+    Enter-GdtXmlRequestSlot -Config $throttleConfig | Out-Null
+    Enter-GdtXmlRequestSlot -Config $throttleConfig | Out-Null
+    Assert-Equal $false (Enter-GdtXmlRequestSlot -Config $throttleConfig -TryOnly) 'Fourth slot refused at XML_MAX_CONCURRENCY'
+    Exit-GdtXmlRequestSlot; Exit-GdtXmlRequestSlot; Exit-GdtXmlRequestSlot
+    Assert-Equal 0 (Get-GdtXmlThrottleSnapshot).ActiveCount 'All cap-test slots released'
+
+    # Gian cach giua hai request XML duoc ton trong.
+    Set-HddtSharedValue -Key 'XmlCurrentIntervalMs' -Value 150
+    Set-HddtSharedValue -Key 'XmlLastRequestStartUtc' -Value ([datetime]::MinValue)
+    $intervalStart = [datetime]::UtcNow
+    $null = Enter-GdtXmlRequestSlot -Config $throttleConfig
+    Exit-GdtXmlRequestSlot
+    $null = Enter-GdtXmlRequestSlot -Config $throttleConfig
+    Exit-GdtXmlRequestSlot
+    $intervalElapsedMs = (([datetime]::UtcNow) - $intervalStart).TotalMilliseconds
+    Assert-Equal $true ($intervalElapsedMs -ge 130) ('XML interval spaces request starts (measured {0} ms)' -f [int]$intervalElapsedMs)
+
+    # HTTP 429: cooldown theo Retry-After, giam mot ket noi, tang gian cach 1.5x.
+    Set-HddtSharedValue -Key 'XmlCurrentIntervalMs' -Value 800
+    Set-HddtSharedValue -Key 'XmlCurrentConcurrency' -Value 2
+    Set-HddtSharedValue -Key 'XmlSuccessStreak' -Value 7
+    $script:CapturedThrottleLogs = @()
+    $cooldownStart = [datetime]::UtcNow
+    Register-GdtXmlRateLimit -RetryAfterSeconds 45
+    $snapshot = Get-GdtXmlThrottleSnapshot
+    Assert-Equal 1 $snapshot.RateLimitCount 'Rate limit counted once'
+    Assert-Equal 1 $snapshot.CurrentConcurrency 'Concurrency drops by one on 429'
+    Assert-Equal 1200 $snapshot.CurrentIntervalMs 'Interval grows by 1.5x on 429'
+    Assert-Equal 0 $snapshot.SuccessStreak 'Success streak resets on 429'
+    $cooldownUntil = [datetime](Get-HddtSharedValue -Key 'XmlGlobalCooldownUntilUtc')
+    Assert-Equal $true (($cooldownUntil - $cooldownStart).TotalSeconds -ge 44) 'Cooldown follows Retry-After'
+    Assert-Equal $true (($cooldownUntil - $cooldownStart).TotalSeconds -le 47) 'No jitter when Retry-After is present'
+    Assert-Equal $false (Enter-GdtXmlRequestSlot -Config $throttleConfig -TryOnly) 'Slot refused during cooldown'
+    Assert-Equal 1 (@($script:CapturedThrottleLogs | Where-Object { $_ -match '\[XML THROTTLE\] HTTP 429 \| cooldown 45s \| concurrency 2→1 \| interval 800→1200 ms' })).Count 'Throttle log reports cooldown, concurrency and interval'
+
+    # Khong co Retry-After va fallback = 0: khong cho phep cho, van giam ket noi.
+    Set-HddtSharedValue -Key 'CooldownFallbackSeconds' -Value 0
+    Set-HddtSharedValue -Key 'XmlCurrentIntervalMs' -Value 0
+    Set-HddtSharedValue -Key 'XmlGlobalCooldownUntilUtc' -Value ([datetime]::MinValue)
+    Register-GdtXmlRateLimit -RetryAfterSeconds 0
+    $cooldownUntil = [datetime](Get-HddtSharedValue -Key 'XmlGlobalCooldownUntilUtc')
+    Assert-Equal $true ($cooldownUntil -le ([datetime]::UtcNow).AddMilliseconds(50)) 'Zero fallback means no cooldown wait'
+    Assert-Equal $true (Enter-GdtXmlRequestSlot -Config $throttleConfig -TryOnly) 'Request retries immediately with zero cooldown'
+    Exit-GdtXmlRequestSlot
+    Assert-Equal 1 (Get-GdtXmlThrottleSnapshot).CurrentConcurrency 'Concurrency decreased on the second 429'
+    Register-GdtXmlRateLimit -RetryAfterSeconds 0
+    Assert-Equal 1 (Get-GdtXmlThrottleSnapshot).CurrentConcurrency 'Concurrency never drops below one'
+
+    # Phuc hoi: giam gian cach truoc, moi tang lai ket noi sau do.
+    Set-HddtSharedValue -Key 'XmlBaseIntervalMs' -Value 800
+    Set-HddtSharedValue -Key 'XmlCurrentIntervalMs' -Value 1200
+    Set-HddtSharedValue -Key 'XmlCurrentConcurrency' -Value 1
+    Set-HddtSharedValue -Key 'XmlSuccessStreak' -Value 0
+    for ($streakIndex = 0; $streakIndex -lt 24; $streakIndex++) { Register-GdtXmlSuccess }
+    Assert-Equal 24 (Get-GdtXmlThrottleSnapshot).SuccessStreak 'Streak counts up to the threshold'
+    Assert-Equal 1200 (Get-GdtXmlThrottleSnapshot).CurrentIntervalMs 'No recovery before the threshold'
+    $script:CapturedThrottleLogs = @()
+    Register-GdtXmlSuccess
+    $snapshot = Get-GdtXmlThrottleSnapshot
+    Assert-Equal 0 $snapshot.SuccessStreak 'Streak resets after recovery'
+    Assert-Equal 1020 $snapshot.CurrentIntervalMs 'Interval reduced to 85 percent after 25 successes'
+    Assert-Equal 1 (@($script:CapturedThrottleLogs | Where-Object { $_ -match '25 request thành công \| interval 1200→1020 ms' })).Count 'Interval recovery logged'
+
+    Set-HddtSharedValue -Key 'XmlCurrentIntervalMs' -Value 800
+    Set-HddtSharedValue -Key 'XmlSuccessStreak' -Value 0
+    $script:CapturedThrottleLogs = @()
+    for ($streakIndex = 0; $streakIndex -lt 25; $streakIndex++) { Register-GdtXmlSuccess }
+    $snapshot = Get-GdtXmlThrottleSnapshot
+    Assert-Equal 2 $snapshot.CurrentConcurrency 'Concurrency raised by one when the interval is back to base'
+    Assert-Equal 1 (@($script:CapturedThrottleLogs | Where-Object { $_ -match 'Kết nối ổn định \| concurrency 1→2' })).Count 'Concurrency recovery logged'
+
+    Set-HddtSharedValue -Key 'XmlCurrentConcurrency' -Value 3
+    Set-HddtSharedValue -Key 'XmlSuccessStreak' -Value 0
+    for ($streakIndex = 0; $streakIndex -lt 25; $streakIndex++) { Register-GdtXmlSuccess }
+    Assert-Equal 3 (Get-GdtXmlThrottleSnapshot).CurrentConcurrency 'Concurrency never exceeds XML_MAX_CONCURRENCY'
+
+    # Dung an toan: khong gui them request nao sau yeu cau dung.
+    Set-HddtSharedValue -Key 'StopRequested' -Value $true
+    $stopRejected = $false
+    try { $null = Enter-GdtXmlRequestSlot -Config $throttleConfig -TryOnly }
+    catch { $stopRejected = $true }
+    Assert-Equal $true $stopRejected 'Slot entry refuses new requests after stop'
+    Set-HddtSharedValue -Key 'StopRequested' -Value $false
+}
+finally {
+    Set-Item Function:\Write-HddtLog -Value $originalThrottleLog
+    Set-HddtSharedState -Shared $null
+    Reset-HddtStopRequest
+}
+
+# --- Co dung trang thai dung chung cho worker thay cờ dung khong ---
+$stopConfig = New-TestXmlConfig
+try {
+    $null = New-HddtXmlSharedState -Config $stopConfig
+    Assert-Equal $false (Test-HddtStopRequested) 'Stop flag is clear initially'
+    Set-HddtStopRequest
+    Assert-Equal $true (Get-HddtSharedValue -Key 'StopRequested') 'Stop flag is visible to worker runspaces'
+    Assert-Equal $true (Test-HddtStopRequested) 'Main thread sees the stop flag'
+    Reset-HddtStopRequest
+    Assert-Equal $false (Get-HddtSharedValue -Key 'StopRequested') 'Reset clears the shared stop flag'
+}
+finally {
+    Set-HddtSharedState -Shared $null
+    Reset-HddtStopRequest
+}
+
+# --- Get-GdtXmlDownloadResult voi Save-GdtInvoiceXml gia ---
+$originalSaveXml = ${function:Save-GdtInvoiceXml}
+$script:SaveXmlMockCalls = 0
+try {
+    Set-Item Function:\Save-GdtInvoiceXml -Value {
+        param($Config, $Invoice)
+        $script:SaveXmlMockCalls++
+        if ($Invoice.InvoiceNumber -eq '2') { throw 'mo phong loi tai XML' }
+        return @((Join-Path $Config.XmlDirectory ('fake-{0}.xml' -f $Invoice.InvoiceNumber)))
+    }
+    $downloadConfig = New-TestXmlConfig
+    $okInvoice = [pscustomobject]@{ Direction = 'purchase'; Source = 'query'; SellerTaxCode = '0101111111'; InvoiceTemplate = '1'; InvoiceSeries = 'C26TABC'; InvoiceNumber = '1' }
+    $okResult = Get-GdtXmlDownloadResult -Config $downloadConfig -Invoice $okInvoice -PipelineIndex 4
+    Assert-Equal $true $okResult.Success 'Successful download is reported as success'
+    Assert-Equal 4 $okResult.PipelineIndex 'Pipeline index is preserved'
+    Assert-Equal 1 @($okResult.XmlFiles).Count 'XML file list is returned'
+    Assert-Equal 'purchase/C26TABC/1' $okResult.Label 'Label is built for progress logs'
+    Assert-Equal '' $okResult.ErrorMessage 'Success has no error message'
+    Assert-Equal 1 $script:SaveXmlMockCalls 'Download helper calls Save-GdtInvoiceXml once'
+
+    $failInvoice = [pscustomobject]@{ Direction = 'purchase'; Source = 'query'; SellerTaxCode = '0101111111'; InvoiceTemplate = '1'; InvoiceSeries = 'C26TABC'; InvoiceNumber = '2' }
+    $failResult = Get-GdtXmlDownloadResult -Config $downloadConfig -Invoice $failInvoice -PipelineIndex 5
+    Assert-Equal $false $failResult.Success 'Failed download is reported without throwing'
+    Assert-Equal 'Tải XML' $failResult.Stage 'Failure stage is the download stage'
+    Assert-Equal 'mo phong loi tai XML' $failResult.ErrorMessage 'Error message is captured for the workbook'
+    Assert-Equal 5 $failResult.PipelineIndex 'Failed result keeps its index'
+}
+finally { Set-Item Function:\Save-GdtInvoiceXml -Value $originalSaveXml }
+
+# --- REDOWNLOAD_XML: dung lai XML da co hoac tai lai ---
+$originalRedownloadRequest = ${function:Invoke-GdtRequest}
+$script:RedownloadRequestCalls = 0
+$script:RedownloadZipBytes = $null
+$tempRedownloadRoot = Join-Path ([IO.Path]::GetTempPath()) ('hddt-redownload-' + [guid]::NewGuid().ToString('N'))
+try {
+    $redownloadZipStream = New-Object IO.MemoryStream
+    $redownloadArchive = New-Object IO.Compression.ZipArchive($redownloadZipStream, [IO.Compression.ZipArchiveMode]::Create, $true)
+    $redownloadEntry = $redownloadArchive.CreateEntry('nested/invoice.xml')
+    $redownloadWriter = New-Object IO.StreamWriter($redownloadEntry.Open())
+    try { $redownloadWriter.Write('<HDon />') } finally { $redownloadWriter.Dispose() }
+    $redownloadArchive.Dispose()
+    $script:RedownloadZipBytes = $redownloadZipStream.ToArray()
+    $redownloadZipStream.Dispose()
+
+    $purchaseDownloadDir = Join-Path $tempRedownloadRoot 'purchase'
+    New-Item -ItemType Directory -Path $purchaseDownloadDir -Force | Out-Null
+    $existingXmlPath = Join-Path $purchaseDownloadDir 'purchase_query_0101111111_1_C26TABC_123.xml'
+    [IO.File]::WriteAllText($existingXmlPath, '<HDon />')
+
+    Set-Item Function:\Invoke-GdtRequest -Value {
+        param($Config, $Uri, [switch]$AsBytes, [string]$RequestProfile)
+        $script:RedownloadRequestCalls++
+        return $script:RedownloadZipBytes
+    }
+    $redownloadConfig = [pscustomobject]@{
+        BaseUrl = 'https://hoadondientu.gdt.gov.vn/api'
+        RedownloadXml = $false
+        XmlDirectory = $tempRedownloadRoot
+    }
+    $redownloadInvoice = [pscustomobject]@{ Direction = 'purchase'; Source = 'query'; SellerTaxCode = '0101111111'; InvoiceTemplate = '1'; InvoiceSeries = 'C26TABC'; InvoiceNumber = '123' }
+
+    $reusedFiles = @(Save-GdtInvoiceXml -Config $redownloadConfig -Invoice $redownloadInvoice)
+    Assert-Equal 0 $script:RedownloadRequestCalls 'Existing XML is reused without any request'
+    Assert-Equal 1 $reusedFiles.Count 'Reuse returns the existing file'
+    Assert-Equal $existingXmlPath $reusedFiles[0] 'Reuse returns the existing file path'
+
+    $redownloadConfig.RedownloadXml = $true
+    $freshFiles = @(Save-GdtInvoiceXml -Config $redownloadConfig -Invoice $redownloadInvoice)
+    Assert-Equal 1 $script:RedownloadRequestCalls 'REDOWNLOAD_XML=true downloads again'
+    Assert-Equal 1 $freshFiles.Count 'Redownload writes the XML again'
+    Assert-Equal $true (Test-Path -LiteralPath $freshFiles[0]) 'Redownloaded XML file exists'
+}
+finally {
+    Set-Item Function:\Invoke-GdtRequest -Value $originalRedownloadRequest
+    Remove-Item -LiteralPath $tempRedownloadRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# --- Token single-flight: mot lan CAPTCHA/dang nhap cho ca phien ---
+$originalTokenRequest = ${function:Request-GdtSessionToken}
+$script:TokenRefreshMockCalls = 0
+try {
+    Set-Item Function:\Request-GdtSessionToken -Value {
+        param($Config)
+        $script:TokenRefreshMockCalls++
+        Start-Sleep -Milliseconds 50
+        return ('token-{0}' -f $script:TokenRefreshMockCalls)
+    }
+    $tokenConfig = New-TestXmlConfig
+    $tokenConfig.Token = 'old-token'
+    $null = New-HddtXmlSharedState -Config $tokenConfig
+    Assert-Equal 'old-token' (Get-GdtAuthToken -Config $tokenConfig) 'Shared token is the source of truth'
+
+    $refreshedToken = Invoke-GdtTokenRefresh -Config $tokenConfig -FailedToken 'old-token'
+    Assert-Equal 'token-1' $refreshedToken 'Refresh returns the new token'
+    Assert-Equal 1 $script:TokenRefreshMockCalls 'Exactly one login for one refresh'
+    Assert-Equal 1 (Get-GdtXmlThrottleSnapshot).AuthRefreshCount 'Refresh is counted in shared metrics'
+    Set-GdtAuthToken -Config $tokenConfig -Token $refreshedToken
+    Assert-Equal 'token-1' $tokenConfig.Token 'Set-GdtAuthToken writes the token back to config'
+
+    $staleToken = Invoke-GdtTokenRefresh -Config $tokenConfig -FailedToken 'old-token'
+    Assert-Equal 'token-1' $staleToken 'A stale token sees the refreshed one'
+    Assert-Equal 1 $script:TokenRefreshMockCalls 'No extra login when the token is already refreshed'
+
+    $sameFailedToken = Invoke-GdtTokenRefresh -Config $tokenConfig -FailedToken 'token-1'
+    Assert-Equal 'token-2' $sameFailedToken 'The current failed token still triggers a refresh'
+    Assert-Equal 2 $script:TokenRefreshMockCalls 'Second refresh logged in once'
+}
+finally {
+    Set-Item Function:\Request-GdtSessionToken -Value $originalTokenRequest
+    Set-HddtSharedState -Shared $null
+}
+
+# --- Single-flight that su: 3 runspace cung goi, chi mot lan dang nhap ---
+$singleFlightShared = $null
+try {
+    $singleFlightConfig = New-TestXmlConfig
+    $singleFlightShared = New-HddtXmlSharedState -Config $singleFlightConfig
+    Set-HddtSharedValue -Key 'Token' -Value 'stale-token'
+    Set-HddtSharedValue -Key 'AuthRefreshCount' -Value 0
+
+    $singleFlightScript = @'
+param($Root, $Shared)
+Set-StrictMode -Version 2.0
+$ErrorActionPreference = 'Stop'
+. (Join-Path $Root 'src/Logging.ps1')
+. (Join-Path $Root 'src/Config.ps1')
+. (Join-Path $Root 'src/Http.ps1')
+. (Join-Path $Root 'src/Login.ps1')
+Set-HddtSharedState -Shared $Shared
+function Request-GdtSessionToken {
+    param($Config)
+    Start-Sleep -Milliseconds 600
+    return 'single-flight-token'
+}
+$flightConfig = [pscustomobject]@{
+    BaseUrl = 'https://hoadondientu.gdt.gov.vn/api'
+    Token = 'stale-token'
+    Username = 'tester'
+    Password = 'secret-password'
+    RequestDelayMs = 0
+    AdaptiveThrottle = $false
+    MaxRetries = 0
+    HttpTimeoutSeconds = 30
+}
+Invoke-GdtTokenRefresh -Config $flightConfig -FailedToken 'stale-token'
+'@
+    $flightWorkers = @()
+    for ($flightIndex = 0; $flightIndex -lt 3; $flightIndex++) {
+        $flightRunspace = [runspacefactory]::CreateRunspace()
+        $flightRunspace.Open()
+        $flightPowerShell = [powershell]::Create()
+        $flightPowerShell.Runspace = $flightRunspace
+        $null = $flightPowerShell.AddScript($singleFlightScript).AddArgument($root).AddArgument($singleFlightShared)
+        $flightWorkers += [pscustomobject]@{
+            PowerShell = $flightPowerShell
+            Runspace = $flightRunspace
+            Handle = $flightPowerShell.BeginInvoke()
+        }
+    }
+    $flightResults = @()
+    foreach ($flightWorker in $flightWorkers) {
+        $flightResults += @($flightWorker.PowerShell.EndInvoke($flightWorker.Handle) | ForEach-Object { [string]$_ })
+        try { $flightWorker.PowerShell.Dispose() } catch { }
+        try { $flightWorker.Runspace.Close(); $flightWorker.Runspace.Dispose() } catch { }
+    }
+    Assert-Equal 3 $flightResults.Count 'Every worker receives a refreshed token'
+    Assert-Equal 0 (@($flightResults | Where-Object { $_ -ne 'single-flight-token' }).Count) 'All workers see the same refreshed token'
+    Assert-Equal 1 (Get-HddtSharedValue -Key 'AuthRefreshCount') 'Only one worker performs the login'
+    Assert-Equal 'single-flight-token' (Get-HddtSharedValue -Key 'Token') 'Shared token updated once'
+}
+finally {
+    if ($null -ne $singleFlightShared) { Set-HddtSharedState -Shared $null }
+    Reset-HddtStopRequest
+}
+
+# --- Pipeline tai XML that su: round-robin, ket qua, log forward, dung sach ---
+$stubRoot = Join-Path ([IO.Path]::GetTempPath()) ('hddt-pipeline-' + [guid]::NewGuid().ToString('N'))
+$pipelineShared = $null
+try {
+    New-Item -ItemType Directory -Path (Join-Path $stubRoot 'src') -Force | Out-Null
+    $stubEncoding = New-Object Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText((Join-Path $stubRoot 'src/Logging.ps1'), @'
+Set-StrictMode -Version 2.0
+$script:HddtSharedState = $null
+$script:HddtLogForwardToShared = $false
+$script:HddtLogLevel = 'INFO'
+function Set-HddtSharedState { param($Shared) $script:HddtSharedState = $Shared }
+function Get-HddtSharedState { return $script:HddtSharedState }
+function Get-HddtSharedValue {
+    param([string]$Key, $Default = $null)
+    $shared = $script:HddtSharedState
+    if ($null -eq $shared) { return $Default }
+    if (-not $shared.ContainsKey($Key)) { return $Default }
+    return $shared[$Key]
+}
+function Set-HddtSharedValue {
+    param([string]$Key, $Value)
+    $shared = $script:HddtSharedState
+    if ($null -eq $shared) { return }
+    [Threading.Monitor]::Enter($shared.SyncRoot)
+    try { $shared[$Key] = $Value }
+    finally { [Threading.Monitor]::Exit($shared.SyncRoot) }
+}
+function Write-HddtLog {
+    param($Level = 'INFO', $Message)
+    if ($script:HddtLogForwardToShared -and $null -ne $script:HddtSharedState) {
+        $shared = $script:HddtSharedState
+        [Threading.Monitor]::Enter($shared.SyncRoot)
+        try { $shared.LogQueue.Add([pscustomobject]@{ Level = ([string]$Level).ToUpperInvariant(); Message = [string]$Message }) }
+        finally { [Threading.Monitor]::Exit($shared.SyncRoot) }
+    }
+}
+'@, $stubEncoding)
+    [IO.File]::WriteAllText((Join-Path $stubRoot 'src/Config.ps1'), @'
+Set-StrictMode -Version 2.0
+function Get-HddtConfigValue {
+    param($Config, [string]$Name, $Default = $null)
+    if ($null -eq $Config) { return $Default }
+    $property = $Config.PSObject.Properties[$Name]
+    if ($null -eq $property -or $null -eq $property.Value) { return $Default }
+    return $property.Value
+}
+'@, $stubEncoding)
+    [IO.File]::WriteAllText((Join-Path $stubRoot 'src/Http.ps1'), @'
+Set-StrictMode -Version 2.0
+$script:HddtStopRequested = $false
+$script:LastGdtRequestUri = ''
+$script:LastGdtStatusCode = 0
+$script:LastGdtRequestAttempts = 0
+$script:LastGdtRetryAfterSeconds = 0
+function Test-HddtStopRequested {
+    if ([bool]$script:HddtStopRequested) { return $true }
+    return [bool](Get-HddtSharedValue -Key 'StopRequested' -Default $false)
+}
+function Set-HddtStopRequest {
+    $script:HddtStopRequested = $true
+    Set-HddtSharedValue -Key 'StopRequested' -Value $true
+}
+function Reset-HddtStopRequest {
+    $script:HddtStopRequested = $false
+    Set-HddtSharedValue -Key 'StopRequested' -Value $false
+}
+function Get-GdtLastRequestUri { return [string]$script:LastGdtRequestUri }
+function Get-GdtLastStatusCode { return [int]$script:LastGdtStatusCode }
+function Get-GdtLastRequestAttempts { return [int]$script:LastGdtRequestAttempts }
+function Get-GdtLastRetryAfterSeconds { return [int]$script:LastGdtRetryAfterSeconds }
+function Get-GdtAuthToken { param($Config) return [string](Get-HddtSharedValue -Key 'Token' -Default '') }
+function Set-GdtAuthToken { param($Config, $Token) Set-HddtSharedValue -Key 'Token' -Value $Token }
+'@, $stubEncoding)
+    [IO.File]::WriteAllText((Join-Path $stubRoot 'src/InvoiceApi.ps1'), @'
+Set-StrictMode -Version 2.0
+function Get-InvoiceLabel {
+    param($Invoice)
+    return '{0}/{1}/{2}' -f $Invoice.Direction, $Invoice.InvoiceSeries, $Invoice.InvoiceNumber
+}
+function Save-GdtInvoiceXml {
+    param($Config, $Invoice)
+    Start-Sleep -Milliseconds 20
+    if ([int]$Invoice.InvoiceNumber % 2 -eq 0) { throw ('mo phong loi tai {0}' -f $Invoice.InvoiceNumber) }
+    return @((Join-Path $Config.XmlDirectory ('fake-{0}.xml' -f $Invoice.InvoiceNumber)))
+}
+'@, $stubEncoding)
+    [IO.File]::WriteAllText((Join-Path $stubRoot 'src/Login.ps1'), @'
+Set-StrictMode -Version 2.0
+function Request-GdtSessionToken { param($Config) return 'stub-token' }
+'@, $stubEncoding)
+    [IO.File]::WriteAllText((Join-Path $stubRoot 'src/BrowserProfile.ps1'), "Set-StrictMode -Version 2.0`n", $stubEncoding)
+    Copy-Item -LiteralPath (Join-Path $root 'src/XmlScheduler.ps1') -Destination (Join-Path $stubRoot 'src/XmlScheduler.ps1') -Force
+
+    $pipelineConfig = New-TestXmlConfig -Concurrency 2 -MaxConcurrency 2 -IntervalMs 0
+    $pipelineShared = New-HddtXmlSharedState -Config $pipelineConfig
+    $pipelineInvoices = @(1..6 | ForEach-Object {
+        [pscustomobject]@{
+            Direction = 'purchase'
+            Source = 'query'
+            SellerTaxCode = '0123456789'
+            InvoiceTemplate = '1'
+            InvoiceSeries = 'C26TABC'
+            InvoiceNumber = ([string]$_)
+        }
+    })
+
+    $originalPipelineLog = ${function:Write-HddtLog}
+    $script:CapturedPipelineLogs = @()
+    $pipeline = Start-HddtXmlPipeline -Config $pipelineConfig -Invoices $pipelineInvoices -Root $stubRoot
+    $pipelineResults = New-Object System.Collections.Generic.List[object]
+    try {
+        Set-Item Function:\Write-HddtLog -Value { param($Level = 'INFO', $Message) $script:CapturedPipelineLogs += [string]$Message }
+        $pipelineDeadline = [datetime]::UtcNow.AddSeconds(30)
+        while (-not (Test-HddtXmlPipelineCompleted -Pipeline $pipeline) -and [datetime]::UtcNow -lt $pipelineDeadline) {
+            foreach ($pipelineResult in @(Receive-HddtXmlPipeline -Pipeline $pipeline)) { $pipelineResults.Add($pipelineResult) }
+            Start-Sleep -Milliseconds 50
+        }
+        foreach ($pipelineResult in @(Receive-HddtXmlPipeline -Pipeline $pipeline)) { $pipelineResults.Add($pipelineResult) }
+    }
+    finally { Set-Item Function:\Write-HddtLog -Value $originalPipelineLog }
+
+    Assert-Equal 6 $pipelineResults.Count 'Every invoice produces exactly one result'
+    $sortedIndexes = @($pipelineResults | ForEach-Object { $_.PipelineIndex } | Sort-Object)
+    Assert-Equal '0 1 2 3 4 5' ($sortedIndexes -join ' ') 'All pipeline indexes are covered once'
+    $successfulResults = @($pipelineResults | Where-Object { $_.Success })
+    $failedResults = @($pipelineResults | Where-Object { -not $_.Success })
+    Assert-Equal 3 $successfulResults.Count 'Even invoices succeed'
+    Assert-Equal 3 $failedResults.Count 'Odd invoices fail'
+    foreach ($pipelineResult in $pipelineResults) {
+        $expectedNumber = [string](($pipelineResult.PipelineIndex + 1))
+        Assert-Equal ('purchase/C26TABC/' + $expectedNumber) $pipelineResult.Label 'Result maps back to its invoice'
+        if ($pipelineResult.Success) {
+            Assert-Equal 1 @($pipelineResult.XmlFiles).Count 'Successful result carries its XML file'
+        }
+        else {
+            Assert-Equal ('mo phong loi tai ' + $expectedNumber) $pipelineResult.ErrorMessage 'Failed result carries the error text'
+            Assert-Equal 'Tải XML' $pipelineResult.Stage 'Failed result keeps the download stage'
+        }
+    }
+    Assert-Equal $true (@($script:CapturedPipelineLogs | Where-Object { $_ -match 'Bắt đầu hóa đơn' }).Count -ge 6) 'Worker logs are forwarded to the main thread'
+
+    # Pipeline da xong: stop khong duoc danh dau ngu dung (khong mat cac buoc sau).
+    $stopResults = @(Stop-HddtXmlPipeline -Pipeline $pipeline)
+    Assert-Equal 0 $stopResults.Count 'Completed pipeline has no leftover results'
+    Assert-Equal $false (Get-HddtSharedValue -Key 'StopRequested') 'Stopping a completed pipeline does not raise the stop flag'
+    $pipelineMetrics = Complete-HddtSharedState -Config $pipelineConfig
+    Assert-Equal $true ($null -ne $pipelineMetrics) 'Shared state closes with metrics'
+    Assert-Equal 0 $pipelineMetrics.AuthRefreshCount 'No token refresh happened in the pipeline test'
+}
+finally {
+    Set-HddtSharedState -Shared $null
+    Reset-HddtStopRequest
+    Remove-Item -LiteralPath $stubRoot -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# --- HTTP 429 voi request XML: khong ngu backoff local, dieu tiep chung ---
+$originalXml429Log = ${function:Write-HddtLog}
+$originalXml429Sleep = ${function:Start-Sleep}
+$originalXml429WebRequest = ${function:Invoke-WebRequest}
+$script:Xml429RequestHits = 0
+$script:Xml429SecondsSlept = 0
+$script:Xml429MillisSlept = 0
+$script:Xml429LogLines = @()
+try {
+    Set-Item Function:\Write-HddtLog -Value { param($Level = 'INFO', $Message) $script:Xml429LogLines += [string]$Message }
+    Set-Item Function:\Start-Sleep -Value {
+        param([int]$Seconds, [int]$Milliseconds)
+        if ($PSBoundParameters.ContainsKey('Seconds')) { $script:Xml429SecondsSlept++ }
+        if ($PSBoundParameters.ContainsKey('Milliseconds')) { $script:Xml429MillisSlept++ }
+    }
+    Set-Item Function:\Invoke-WebRequest -Value {
+        param($Uri, $Method, $Headers, $TimeoutSec, $UseBasicParsing, $WebSession, $ErrorAction, $Body, $ContentType)
+        $script:Xml429RequestHits++
+        if ($script:Xml429RequestHits -le 2) {
+            $fakeResponse = New-Object HddtTest.FakeWebResponse (429)
+            $exception = New-Object System.Net.WebException('Simulated HTTP 429', $null, [System.Net.WebExceptionStatus]::ProtocolError, $fakeResponse)
+            $errorRecord = New-Object System.Management.Automation.ErrorRecord($exception, 'Http429', [System.Management.Automation.ErrorCategory]::InvalidOperation, $Uri)
+            throw $errorRecord
+        }
+        return [pscustomobject]@{
+            StatusCode = 200
+            Content = '{"ok":true}'
+            RawContentStream = (New-Object IO.MemoryStream (,[byte[]](75, 76)))
+        }
+    }
+
+    $xml429Config = New-TestXmlConfig -Concurrency 2 -MaxConcurrency 3 -IntervalMs 0
+    $null = New-HddtXmlSharedState -Config $xml429Config
+    Set-HddtSharedValue -Key 'CooldownFallbackSeconds' -Value 0
+    Reset-HddtStopRequest
+
+    $xml429Bytes = [byte[]](Invoke-GdtRequest -Config $xml429Config -Uri ($xml429Config.BaseUrl + '/query/invoices/export-xml?nbmst=0101111111') -AsBytes)
+    Assert-Equal 3 $script:Xml429RequestHits 'XML request retries after two 429 responses'
+    Assert-Equal 2 $xml429Bytes.Length 'XML request succeeds after the rate-limit window'
+    Assert-Equal 0 $script:Xml429SecondsSlept 'XML 429 does not sleep a local backoff'
+    Assert-Equal 0 $script:Xml429MillisSlept 'Scheduler waits nothing with zero cooldown and interval'
+    $snapshot = Get-GdtXmlThrottleSnapshot
+    Assert-Equal 2 $snapshot.RateLimitCount 'Both 429 responses register an XML rate limit'
+    Assert-Equal 1 $snapshot.CurrentConcurrency 'Concurrency reduced and floored at one'
+    Assert-Equal 1 $snapshot.CompletedCount 'Completed request counted once'
+    Assert-Equal 2 (@($script:Xml429LogLines | Where-Object { $_ -match '\[XML THROTTLE\] HTTP 429' })).Count 'One throttle log per 429 response'
+    Assert-Equal 0 (@($script:Xml429LogLines | Where-Object { $_ -match '(?i)secret-password' })).Count 'Password never reaches the log'
+}
+finally {
+    Set-Item Function:\Write-HddtLog -Value $originalXml429Log
+    Set-Item Function:\Start-Sleep -Value $originalXml429Sleep
+    if ($null -ne $originalXml429WebRequest) {
+        Set-Item Function:\Invoke-WebRequest -Value $originalXml429WebRequest
+    }
+    else {
+        Remove-Item Function:\Invoke-WebRequest -ErrorAction SilentlyContinue
+    }
+    Set-HddtSharedState -Shared $null
+    Reset-HddtStopRequest
+}
+
+# --- Request that mang header profile (khong con UA legacy) ---
+$script:CapturedProfileRequestHeaders = $null
+$originalProfileWebRequest = ${function:Invoke-WebRequest}
+try {
+    Set-Item Function:\Invoke-WebRequest -Value {
+        param($Uri, $Method, $Headers, $TimeoutSec, $UseBasicParsing, $WebSession, $ErrorAction, $Body, $ContentType, [uri]$Proxy, [pscredential]$ProxyCredential)
+        $script:CapturedProfileRequestHeaders = $Headers
+        return [pscustomobject]@{
+            StatusCode = 200
+            Content = '{"ok":true}'
+            RawContentStream = (New-Object IO.MemoryStream (,[byte[]](1, 2, 3)))
+        }
+    }
+    Reset-GdtBrowserProfile
+    $profileRequestConfig = New-TestXmlConfig
+    $profileRequestConfig.BrowserUserAgent = 'IntegrationAgent/9.9'
+    Reset-HddtStopRequest
+
+    Invoke-GdtRequest -Config $profileRequestConfig -Uri ($profileRequestConfig.BaseUrl + '/query/invoices?size=50') | Out-Null
+    Assert-Equal 'IntegrationAgent/9.9' $script:CapturedProfileRequestHeaders['User-Agent'] 'Real request carries the browser profile UA'
+    Assert-Equal $true ($script:CapturedProfileRequestHeaders['Referer'] -like 'https://hoadondientu.gdt.gov.vn*') 'Real request carries the profile Referer'
+    Assert-Equal $true ($script:CapturedProfileRequestHeaders.ContainsKey('Request-Id')) 'Request-Id header is kept per request'
+    Assert-Equal $true ($script:CapturedProfileRequestHeaders['Accept'] -like 'application/json*') 'Real request accepts JSON'
+    Assert-Equal $false ($script:CapturedProfileRequestHeaders.ContainsKey('Accept-Encoding')) 'Accept-Encoding is left to the transport'
+    Assert-Equal $false ($script:CapturedProfileRequestHeaders.ContainsKey('Connection')) 'Connection header is not forced'
+    Assert-Equal 'Bearer test-token' $script:CapturedProfileRequestHeaders['Authorization'] 'Authorization uses the configured token'
+
+    Invoke-GdtRequest -Config $profileRequestConfig -Uri ($profileRequestConfig.BaseUrl + '/query/invoices/export-xml?x=1') -AsBytes | Out-Null
+    Assert-Equal $true ($script:CapturedProfileRequestHeaders['Accept'] -like '*application/zip*') 'Export request accepts zip downloads'
+    Assert-Equal 'IntegrationAgent/9.9' $script:CapturedProfileRequestHeaders['User-Agent'] 'Export request uses the same browser profile'
+}
+finally {
+    if ($null -ne $originalProfileWebRequest) {
+        Set-Item Function:\Invoke-WebRequest -Value $originalProfileWebRequest
+    }
+    else {
+        Remove-Item Function:\Invoke-WebRequest -ErrorAction SilentlyContinue
+    }
+    Reset-GdtBrowserProfile
+    Reset-HddtStopRequest
 }
 
 # --- Kiem tra cu phap toan bo script (bat loi encoding/thieu dau) ---

@@ -37,6 +37,8 @@ Agent phải:
 | `src/Logging.ps1` | `Write-HddtLog`, `Start-HddtLogging`, dừng an toàn (Ctrl+C) |
 | `src/Config.ps1` | Đọc `.env`, kiểm tra giá trị, dựng object cấu hình |
 | `src/Http.ps1` | `Invoke-GdtRequest`: token, proxy, retry, 429, log mạng |
+| `src/BrowserProfile.ps1` | Một UA/client hint/locale cho cả phiên, header theo endpoint |
+| `src/XmlScheduler.ps1` | Trạng thái dùng chung, slot/giãn cách, pipeline tải XML |
 | `src/Login.ps1` | CAPTCHA SVG → ký tự, đăng nhập, lấy token trong bộ nhớ |
 | `src/InvoiceApi.ps1` | Gọi API GDT: danh sách hóa đơn, tải ZIP XML, chuỗi liên quan |
 | `src/XmlParser.ps1` | Parse XML hóa đơn thành `Summary` + `Details` |

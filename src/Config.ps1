@@ -69,6 +69,17 @@ function ConvertTo-EnvBoolean {
     }
 }
 
+# Đọc một trường của object cấu hình một cách an toàn với Set-StrictMode:
+# object cấu hình do test tạo có thể thiếu trường mới, và đọc property không
+# tồn tại sẽ ném lỗi thay vì trả về $Default.
+function Get-HddtConfigValue {
+    param($Config, [string]$Name, $Default = $null)
+    if ($null -eq $Config) { return $Default }
+    $property = $Config.PSObject.Properties[$Name]
+    if ($null -eq $property -or $null -eq $property.Value) { return $Default }
+    return $property.Value
+}
+
 function Resolve-RepositoryPath {
     param([string]$RepositoryRoot, [string]$Value)
     if ([System.IO.Path]::IsPathRooted($Value)) {
@@ -242,6 +253,19 @@ function Get-HddtConfig {
     if ($progressEvery -lt 1 -or $progressEvery -gt 1000) { throw 'PROGRESS_EVERY phải nằm trong khoảng 1-1000.' }
     if ($logLevel -notin @('debug', 'info', 'warn', 'error')) { throw 'LOG_LEVEL phải là debug, info, warn hoặc error.' }
 
+    # Tải XML song song có kiểm soát: XML_CONCURRENCY là số kết nối khởi đầu,
+    # XML_MAX_CONCURRENCY là trần để cơ chế tự phục hồi tăng dần sau rate-limit,
+    # XML_REQUEST_INTERVAL_MS là giãn cách giữa hai request XML liên tiếp.
+    $xmlConcurrency = [int](Get-EnvValue $values 'XML_CONCURRENCY' '2')
+    $xmlMaxConcurrency = [int](Get-EnvValue $values 'XML_MAX_CONCURRENCY' '3')
+    $xmlRequestIntervalMs = [int](Get-EnvValue $values 'XML_REQUEST_INTERVAL_MS' '800')
+    $browserUserAgent = (Get-EnvValue $values 'BROWSER_USER_AGENT' '').Trim()
+    $logHttpProfile = ConvertTo-EnvBoolean 'LOG_HTTP_PROFILE' (Get-EnvValue $values 'LOG_HTTP_PROFILE' 'false')
+    if ($xmlConcurrency -lt 1 -or $xmlConcurrency -gt 10) { throw 'XML_CONCURRENCY phải nằm trong khoảng 1-10.' }
+    if ($xmlMaxConcurrency -lt 1 -or $xmlMaxConcurrency -gt 10) { throw 'XML_MAX_CONCURRENCY phải nằm trong khoảng 1-10.' }
+    if ($xmlConcurrency -gt $xmlMaxConcurrency) { throw 'XML_CONCURRENCY không được lớn hơn XML_MAX_CONCURRENCY.' }
+    if ($xmlRequestIntervalMs -lt 0 -or $xmlRequestIntervalMs -gt 60000) { throw 'XML_REQUEST_INTERVAL_MS phải nằm trong khoảng 0-60000.' }
+
     $includeRegular = ConvertTo-EnvBoolean 'INCLUDE_REGULAR' (Get-EnvValue $values 'INCLUDE_REGULAR' 'true')
     $includeSco = ConvertTo-EnvBoolean 'INCLUDE_SCO' (Get-EnvValue $values 'INCLUDE_SCO' 'true')
     if (-not $includeRegular -and -not $includeSco) { throw 'Phải bật ít nhất một trong INCLUDE_REGULAR hoặc INCLUDE_SCO.' }
@@ -313,6 +337,11 @@ function Get-HddtConfig {
         LogLevel = $logLevel
         LogToFile = ConvertTo-EnvBoolean 'LOG_TO_FILE' (Get-EnvValue $values 'LOG_TO_FILE' 'true')
         AdaptiveThrottle = ConvertTo-EnvBoolean 'ADAPTIVE_THROTTLE' (Get-EnvValue $values 'ADAPTIVE_THROTTLE' 'true')
+        XmlConcurrency = $xmlConcurrency
+        XmlMaxConcurrency = $xmlMaxConcurrency
+        XmlRequestIntervalMs = $xmlRequestIntervalMs
+        BrowserUserAgent = $browserUserAgent
+        LogHttpProfile = $logHttpProfile
         IncludeRegular = $includeRegular
         IncludeSco = $includeSco
         FetchRelated = $fetchRelated
