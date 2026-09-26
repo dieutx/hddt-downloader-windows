@@ -274,3 +274,27 @@ pwsh-preview -NoProfile -File tests/Run-Tests.ps1
 - `.env` đã được Git bỏ qua; không commit mật khẩu hoặc dữ liệu hóa đơn thật.
 - Mật khẩu không được ghi vào log hoặc file Excel.
 - Token đăng nhập chỉ được tạo tự động trong bộ nhớ khi chương trình chạy; người dùng không cần nhập token.
+
+Chi tiết ở `SECURITY.md`.
+
+---
+
+## Đóng góp
+
+| Tài liệu | Dành cho |
+|---|---|
+| [`AGENTS.md`](AGENTS.md) | AI coding agent: bản đồ repo, quy tắc kỹ thuật, Definition of Done |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Quy trình, đặt tên branch, commit, Pull Request |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Luồng dữ liệu và vai trò từng module |
+| [`docs/EXCEL_FORMAT.md`](docs/EXCEL_FORMAT.md) | Hợp đồng workbook `.xlsx` và quy tắc đóng gói OPC |
+| [`SECURITY.md`](SECURITY.md) | Dữ liệu không được commit |
+
+```bash
+git switch -c fix/ten-rang-nho
+# sửa code và thêm test vào tests/Run-Tests.ps1
+pwsh -NoProfile -File tests/Run-Tests.ps1   # phải in "All tests passed."
+git commit -m "fix: mô tả vấn đề"
+git push -u origin fix/ten-rang-nho
+```
+
+Logic gốc của bản Excel add-in: [dieutx/TaiHoaDonDienTu](https://github.com/dieutx/TaiHoaDonDienTu).
