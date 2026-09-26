@@ -963,6 +963,7 @@ try {
     Assert-Equal 4 $defaultNewConfig.XmlConcurrency 'XML_CONCURRENCY defaults to 4'
     Assert-Equal 4 $defaultNewConfig.XmlMaxConcurrency 'XML_MAX_CONCURRENCY defaults to 4'
     Assert-Equal 800 $defaultNewConfig.XmlRequestIntervalMs 'XML_REQUEST_INTERVAL_MS defaults to 800'
+    Assert-Equal 10 $defaultNewConfig.XmlRecoveryStepSeconds 'XML_RECOVERY_STEP_SECONDS defaults to 10'
     Assert-Equal '' $defaultNewConfig.BrowserUserAgent 'BROWSER_USER_AGENT defaults to empty'
     Assert-Equal $false $defaultNewConfig.LogHttpProfile 'LOG_HTTP_PROFILE defaults to false'
 
@@ -970,12 +971,14 @@ try {
         'XML_CONCURRENCY=4'
         'XML_MAX_CONCURRENCY=6'
         'XML_REQUEST_INTERVAL_MS=250'
+        'XML_RECOVERY_STEP_SECONDS=20'
         'BROWSER_USER_AGENT=TestAgent/1.0'
         'LOG_HTTP_PROFILE=true'
     )) -RepositoryRoot $root
     Assert-Equal 4 $customNewConfig.XmlConcurrency 'XML_CONCURRENCY parsed from .env'
     Assert-Equal 6 $customNewConfig.XmlMaxConcurrency 'XML_MAX_CONCURRENCY parsed from .env'
     Assert-Equal 250 $customNewConfig.XmlRequestIntervalMs 'XML_REQUEST_INTERVAL_MS parsed from .env'
+    Assert-Equal 20 $customNewConfig.XmlRecoveryStepSeconds 'XML_RECOVERY_STEP_SECONDS parsed from .env'
     Assert-Equal 'TestAgent/1.0' $customNewConfig.BrowserUserAgent 'BROWSER_USER_AGENT parsed from .env'
     Assert-Equal $true $customNewConfig.LogHttpProfile 'LOG_HTTP_PROFILE parsed from .env'
 
@@ -984,6 +987,7 @@ try {
     Assert-Equal $true (Test-TestEnvRejected @('XML_CONCURRENCY=11')) 'XML_CONCURRENCY above 10 is rejected'
     Assert-Equal $true (Test-TestEnvRejected @('XML_MAX_CONCURRENCY=0')) 'XML_MAX_CONCURRENCY below 1 is rejected'
     Assert-Equal $true (Test-TestEnvRejected @('XML_REQUEST_INTERVAL_MS=60001')) 'XML_REQUEST_INTERVAL_MS range is enforced'
+    Assert-Equal $true (Test-TestEnvRejected @('XML_RECOVERY_STEP_SECONDS=0')) 'XML_RECOVERY_STEP_SECONDS below 1 is rejected'
     Assert-Equal $true (Test-TestEnvRejected @('LOG_HTTP_PROFILE=maybe')) 'LOG_HTTP_PROFILE must be a boolean'
 }
 finally {
@@ -1210,6 +1214,20 @@ try {
     Register-GdtXmlRateLimit -RetryAfterSeconds 0
     Assert-Equal 1 (Get-GdtXmlThrottleSnapshot).CurrentConcurrency 'Concurrency never drops below one'
 
+    # Mot hoa don retry 429 lien tuc khong duoc keo tut concurrency moi lan:
+    # chi giam toi da mot lan trong khoang XmlConcurrencyDropCooldownSeconds.
+    Set-HddtSharedValue -Key 'XmlCurrentConcurrency' -Value 4
+    Set-HddtSharedValue -Key 'XmlLastConcurrencyDropUtc' -Value ([datetime]::MinValue)
+    Set-HddtSharedValue -Key 'XmlGlobalCooldownUntilUtc' -Value ([datetime]::MinValue)
+    Set-HddtSharedValue -Key 'XmlLastRateLimitUtc' -Value ([datetime]::MinValue)
+    Register-GdtXmlRateLimit -RetryAfterSeconds 0
+    Assert-Equal 3 (Get-GdtXmlThrottleSnapshot).CurrentConcurrency 'First 429 in a burst drops concurrency'
+    Register-GdtXmlRateLimit -RetryAfterSeconds 0
+    Assert-Equal 3 (Get-GdtXmlThrottleSnapshot).CurrentConcurrency 'Repeated 429 in the same window does not drop concurrency again'
+    Set-HddtSharedValue -Key 'XmlLastConcurrencyDropUtc' -Value ([datetime]::UtcNow).AddSeconds(-60)
+    Register-GdtXmlRateLimit -RetryAfterSeconds 0
+    Assert-Equal 2 (Get-GdtXmlThrottleSnapshot).CurrentConcurrency 'A later 429 drops concurrency again'
+
     # Phuc hoi theo thoi gian: im 429 du lau thi chia doi gian cach ve muc cau
     # hinh truoc, sau do moi tang lai ket noi. Khong doi chuoi request thanh
     # cong lien tiep nen khong bi ket o 1 ket noi sau mot dot rate-limit.
@@ -1242,7 +1260,11 @@ try {
     Register-GdtXmlSuccess
     Assert-Equal 3 (Get-GdtXmlThrottleSnapshot).CurrentConcurrency 'Concurrency never exceeds XML_MAX_CONCURRENCY'
     Assert-Equal ([datetime]::MinValue) (Get-HddtSharedValue -Key 'XmlLastRateLimitUtc') 'Fully recovered throttle stops tracking the last 429'
-    Assert-Equal 0 $script:CapturedThrottleLogs.Count 'No log while fully recovered'
+    Assert-Equal 1 $script:CapturedThrottleLogs.Count 'Full recovery is logged once'
+    Assert-Equal 1 (@($script:CapturedThrottleLogs | Where-Object { $_ -match 'Đã phục hồi hoàn toàn' })).Count 'Full recovery log text'
+    $script:CapturedThrottleLogs = @()
+    Register-GdtXmlSuccess
+    Assert-Equal 0 $script:CapturedThrottleLogs.Count 'No repeat log after full recovery'
 
     # Dung an toan: khong gui them request nao sau yeu cau dung.
     Set-HddtSharedValue -Key 'StopRequested' -Value $true

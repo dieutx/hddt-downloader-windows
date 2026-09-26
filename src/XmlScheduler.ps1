@@ -93,7 +93,12 @@ function New-HddtXmlSharedState {
         XmlBaseIntervalMs = $intervalMs
         XmlCurrentIntervalMs = $intervalMs
         XmlLastRateLimitUtc = [datetime]::MinValue
-        XmlRecoveryStepSeconds = $script:HddtXmlRecoveryStepSeconds
+        XmlRecoveryStepSeconds = [int](Get-HddtConfigValue $Config 'XmlRecoveryStepSeconds' $script:HddtXmlRecoveryStepSeconds)
+        # Một hóa đơn bị 429 có thể tự thử lại nhiều lần; chỉ giảm số kết nối
+        # tối đa một lần trong khoảng này để cơn 429 của một request không kéo
+        # tụt concurrency xuống 1 ngay lập tức.
+        XmlConcurrencyDropCooldownSeconds = 30
+        XmlLastConcurrencyDropUtc = [datetime]::MinValue
         XmlRateLimitCount = 0
         XmlGlobalCooldownUntilUtc = [datetime]::MinValue
         XmlLastRequestStartUtc = [datetime]::MinValue
@@ -212,8 +217,14 @@ function Register-GdtXmlRateLimit {
         }
 
         $oldConcurrency = [int]$shared.XmlCurrentConcurrency
-        $newConcurrency = [Math]::Max(1, $oldConcurrency - 1)
-        $shared.XmlCurrentConcurrency = $newConcurrency
+        $newConcurrency = $oldConcurrency
+        $dropCooldownSeconds = [double]$shared.XmlConcurrencyDropCooldownSeconds
+        $lastDropUtc = [datetime]$shared.XmlLastConcurrencyDropUtc
+        if (([datetime]::UtcNow - $lastDropUtc).TotalSeconds -ge $dropCooldownSeconds) {
+            $newConcurrency = [Math]::Max(1, $oldConcurrency - 1)
+            $shared.XmlCurrentConcurrency = $newConcurrency
+            $shared.XmlLastConcurrencyDropUtc = [datetime]::UtcNow
+        }
 
         $oldInterval = [int]$shared.XmlCurrentIntervalMs
         $newInterval = [Math]::Min(5000, [Math]::Max([int]$shared.XmlBaseIntervalMs, [int][Math]::Floor($oldInterval * 1.5)))
@@ -251,18 +262,20 @@ function Register-GdtXmlSuccess {
         if ($interval -gt $baseInterval) {
             $newInterval = [Math]::Max($baseInterval, [int][Math]::Floor($interval / 2))
             $shared.XmlCurrentIntervalMs = $newInterval
+            $shared.XmlLastRateLimitUtc = [datetime]::UtcNow
             $logMessage = ('Kết nối ổn định {0}s | interval {1}→{2} ms' -f [int]$stepSeconds, $interval, $newInterval)
         }
         elseif ($concurrency -lt $maxConcurrency) {
             $shared.XmlCurrentConcurrency = ($concurrency + 1)
+            $shared.XmlLastRateLimitUtc = [datetime]::UtcNow
             $logMessage = ('Kết nối ổn định {0}s | concurrency {1}→{2}' -f [int]$stepSeconds, $concurrency, ($concurrency + 1))
         }
         else {
-            # Hồi phục hoàn toàn: ngừng theo dõi để không kiểm tra lại vô ích.
+            # Hồi phục hoàn toàn: ngừng theo dõi để không kiểm tra lại vô ích,
+            # nhưng vẫn báo một lần để biết worker đã trở về đủ kết nối.
             $shared.XmlLastRateLimitUtc = [datetime]::MinValue
-            return
+            $logMessage = ('Đã phục hồi hoàn toàn | interval {0} ms | concurrency {1}' -f $interval, $concurrency)
         }
-        $shared.XmlLastRateLimitUtc = [datetime]::UtcNow
     }
     finally { [Threading.Monitor]::Exit($shared.SyncRoot) }
 

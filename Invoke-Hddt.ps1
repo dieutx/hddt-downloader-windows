@@ -186,7 +186,7 @@ try {
     $adaptiveText = if ($config.AdaptiveThrottle) { 'bật' } else { 'tắt' }
     $xmlModeText = if ($config.RedownloadXml) { 'tải lại từ đầu' } else { 'tiếp tục/tái sử dụng' }
     Write-HddtLog INFO ('[CẤU HÌNH] Mạng: tuần tự | page size {0} | giãn cách {1} ms | tự điều tiết {2} | retry {3} | timeout {4}s' -f $config.PageSize, $config.RequestDelayMs, $adaptiveText, $config.MaxRetries, $config.HttpTimeoutSeconds)
-    Write-HddtLog INFO ('[CẤU HÌNH] Tải XML: tối đa {0} kết nối (khởi đầu {1}) | giãn cách {2} ms/request.' -f $config.XmlMaxConcurrency, $config.XmlConcurrency, $config.XmlRequestIntervalMs)
+    Write-HddtLog INFO ('[CẤU HÌNH] Tải XML: tối đa {0} worker/kết nối (khởi đầu {1}) | giãn cách {2} ms/request | phục hồi {3}s/bước.' -f $config.XmlMaxConcurrency, $config.XmlConcurrency, $config.XmlRequestIntervalMs, $config.XmlRecoveryStepSeconds)
     Write-GdtBrowserProfileLog -Config $config
     if ($null -ne $config.ProxyUri) {
         Write-HddtLog INFO ('[CẤU HÌNH] Proxy: {0}:{1}' -f $config.ProxyUri.Host, $config.ProxyUri.Port)

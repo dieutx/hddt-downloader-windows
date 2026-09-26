@@ -79,8 +79,9 @@ thông báo lúc bắt đầu/kết thúc làm việc.
 - `Enter-GdtXmlRequestSlot` giữ đúng `XML_CONCURRENCY` kết nối và giãn cách
   `XML_REQUEST_INTERVAL_MS` giữa hai request;
 - HTTP 429 gọi `Register-GdtXmlRateLimit`: nghỉ theo `Retry-After` (không có
-  thì dùng `COOLDOWN_FALLBACK_SECONDS`, mặc định 15s), giảm một kết nối, tăng
-  khoảng cách 1.5 lần và ghi lại thời điểm 429 gần nhất;
+  thì dùng `COOLDOWN_FALLBACK_SECONDS`, mặc định 15s), tăng khoảng cách 1.5 lần
+  và ghi lại thời điểm 429 gần nhất. Số kết nối chỉ giảm tối đa một lần trong
+  mỗi 30s để một hóa đơn tự thử lại nhiều lần không kéo tụt cả pool xuống 1;
 - `Register-GdtXmlSuccess` phục hồi theo thời gian: khi đã im 429 đủ lâu
   (`XML_RECOVERY_STEP_SECONDS`, mặc định 10s mỗi bước), giảm một nửa khoảng
   cách về mức cấu hình trước, rồi tăng lại kết nối, không vượt
