@@ -38,6 +38,7 @@ Write-HddtLog INFO ('[TẢI XML] Worker {0}/{1} bắt đầu làm việc.' -f $w
 while ($workerIndex -lt $Invoices.Count) {
     if (Test-HddtStopRequested) { break }
     $invoice = $Invoices[$workerIndex]
+    Write-HddtLog INFO ('[TẢI XML] Worker {0}/{1} nhận hóa đơn {2}/{3}: {4} [{5}].' -f $workerNumber, $workerCount, ($workerIndex + 1), $Invoices.Count, (Get-InvoiceLabel -Invoice $invoice), $invoice.Source)
     try {
         $result = Get-GdtXmlDownloadResult -Config $Config -Invoice $invoice -PipelineIndex $workerIndex -WorkerIndex $workerNumber -WorkerCount $workerCount
     }
@@ -364,7 +365,6 @@ function Get-GdtXmlDownloadResult {
     $label = Get-InvoiceLabel -Invoice $Invoice
     $watch = [Diagnostics.Stopwatch]::StartNew()
     try {
-        Write-HddtLog DEBUG ('Worker {0}/{1} bắt đầu hóa đơn {2}: {3} [{4}]' -f $WorkerIndex, $WorkerCount, ($PipelineIndex + 1), $label, $Invoice.Source)
         $xmlFiles = @(Save-GdtInvoiceXml -Config $Config -Invoice $Invoice)
         $watch.Stop()
         return [pscustomobject]@{

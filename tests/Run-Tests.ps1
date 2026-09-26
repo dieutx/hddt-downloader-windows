@@ -1615,7 +1615,8 @@ function Request-GdtSessionToken { param($Config) return 'stub-token' }
             Assert-Equal 'Tải XML' $pipelineResult.Stage 'Failed result keeps the download stage'
         }
     }
-    Assert-Equal $true (@($script:CapturedPipelineLogs | Where-Object { $_ -match 'Bắt đầu hóa đơn' }).Count -ge 6) 'Worker logs are forwarded to the main thread'
+    Assert-Equal $true (@($script:CapturedPipelineLogs | Where-Object { $_ -match 'nhận hóa đơn' }).Count -ge 6) 'Worker logs are forwarded to the main thread'
+    Assert-Equal $true (@($script:CapturedPipelineLogs | Where-Object { $_ -match 'Worker \d+/2 nhận hóa đơn \d+/6: purchase/C26TABC/\d+ \[query\]\.' }).Count -ge 6) 'Worker activity log names the invoice being processed'
     Assert-Equal $true (@($script:CapturedPipelineLogs | Where-Object { $_ -match '\[TẢI XML\] Khởi động 2 worker' }).Count -ge 1) 'Pipeline log states how many workers start'
     Assert-Equal $true (@($script:CapturedPipelineLogs | Where-Object { $_ -match 'Worker \d+/2 bắt đầu làm việc' }).Count -ge 2) 'Every worker logs that it starts working'
     Assert-Equal $true (@($script:CapturedPipelineLogs | Where-Object { $_ -match 'Worker \d+/2 kết thúc' }).Count -ge 2) 'Every worker logs that it finishes'
