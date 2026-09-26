@@ -619,7 +619,9 @@ function Save-GdtInvoiceXml {
 
     $baseName = ConvertTo-SafeFileName ('{0}_{1}_{2}_{3}_{4}_{5}' -f $Invoice.Direction, $Invoice.Source, $Invoice.SellerTaxCode, $Invoice.InvoiceTemplate, $Invoice.InvoiceSeries, $Invoice.InvoiceNumber)
     $namePattern = '^{0}(?:_\d+)?$' -f [regex]::Escape($baseName)
-    $existingXmlFiles = @(Get-ChildItem -LiteralPath $directionDirectory -Filter '*.xml' -File -ErrorAction SilentlyContinue |
+    # Lọc ngay ở tầng hệ thống file theo tiền tố tên thay vì quét toàn thư mục:
+    # khi có hàng nghìn XML, quét tất cả mỗi hóa đơn là O(N^2) và làm chậm dần.
+    $existingXmlFiles = @(Get-ChildItem -LiteralPath $directionDirectory -Filter ($baseName + '*.xml') -File -ErrorAction SilentlyContinue |
         Where-Object { $_.BaseName -match $namePattern } |
         Select-Object -ExpandProperty FullName)
     if (-not $Config.RedownloadXml -and $existingXmlFiles.Count -gt 0) {

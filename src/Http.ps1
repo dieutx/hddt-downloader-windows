@@ -8,6 +8,11 @@ $script:AdaptiveBaseDelayMs = $null
 $script:SuccessfulRequestStreak = 0
 $script:GdtWebSession = New-Object Microsoft.PowerShell.Commands.WebRequestSession
 
+# Gate dùng chung cho tải XML đa luồng (runspace). $null = chạy tuần tự như cũ.
+# Khi có gate, mọi runspace tham chiếu CÙNG một đối tượng in-process: giãn cách
+# request, mốc tạm dừng 429, số luồng hiện hành và cờ dừng đều dùng chung.
+$script:HddtSharedGate = $null
+
 # Điều khiển dừng an toàn (tương ứng GdtStopRequested trong VBA).
 # Ctrl+C lần 1 yêu cầu dừng sau request hiện tại, lần 2 dừng ngay.
 # Dữ liệu đã tải trước khi dừng vẫn được xuất ra Excel.
@@ -23,9 +28,11 @@ function Reset-HddtStopRequest {
 
 function Set-HddtStopRequest {
     $script:HddtStopRequested = $true
+    if ($null -ne $script:HddtSharedGate) { $script:HddtSharedGate.StopRequested = $true }
 }
 
 function Test-HddtStopRequested {
+    if ($null -ne $script:HddtSharedGate) { return [bool]$script:HddtSharedGate.StopRequested }
     return [bool]$script:HddtStopRequested
 }
 
@@ -64,6 +71,7 @@ function Register-HddtStopHandler {
                 return
             }
             $script:HddtStopRequested = $true
+            if ($null -ne $script:HddtSharedGate) { $script:HddtSharedGate.StopRequested = $true }
             $eventArgs.Cancel = $true
             try {
                 Write-Host ''
@@ -73,6 +81,62 @@ function Register-HddtStopHandler {
         return $true
     }
     catch { return $false }
+}
+
+# ---------------------------------------------------------------------------
+# Shared gate cho tải XML đa luồng
+# ---------------------------------------------------------------------------
+
+function New-HddtSharedGate {
+    param(
+        [Parameter(Mandatory = $true)][int]$MaxWorkers,
+        [Parameter(Mandatory = $true)][int]$BaseDelayMs
+    )
+    $max = [Math]::Max(1, $MaxWorkers)
+    return [pscustomobject]@{
+        Lock = New-Object System.Object
+        LogLock = New-Object System.Object
+        LoginLock = New-Object System.Object
+        LastRequestUtc = [datetime]::MinValue
+        PauseUntilUtc = [datetime]::MinValue
+        MaxWorkers = $max
+        CurrentLimit = $max
+        ActiveWorkers = 0
+        NextIndex = 0
+        SuccessStreak = 0
+        BaseDelayMs = [int]$BaseDelayMs
+        AdaptiveDelayMs = [int]$BaseDelayMs
+        StopRequested = $false
+    }
+}
+
+function Set-HddtSharedGate {
+    param($Gate)
+    $script:HddtSharedGate = $Gate
+}
+
+function Lock-HddtGate {
+    param([Parameter(Mandatory = $true)]$Gate)
+    [System.Threading.Monitor]::Enter($Gate.Lock)
+}
+
+function Unlock-HddtGate {
+    param([Parameter(Mandatory = $true)]$Gate)
+    [System.Threading.Monitor]::Exit($Gate.Lock)
+}
+
+# Tạm dừng toàn cục mọi luồng (dùng sau HTTP 429) cho tới mốc thời gian mới.
+# Chỉ đẩy mốc ra xa hơn, không bao giờ kéo gần lại.
+function Set-GdtSharedPause {
+    param([Parameter(Mandatory = $true)][int]$Seconds)
+    $gate = $script:HddtSharedGate
+    if ($null -eq $gate) { return }
+    Lock-HddtGate $gate
+    try {
+        $until = [datetime]::UtcNow.AddSeconds($Seconds)
+        if ($until -gt $gate.PauseUntilUtc) { $gate.PauseUntilUtc = $until }
+    }
+    finally { Unlock-HddtGate $gate }
 }
 
 function Test-AdaptiveThrottleEnabled {
@@ -95,6 +159,24 @@ function Get-GdtRequestDelayMs {
 
 function Register-GdtRateLimit {
     param([Parameter(Mandatory = $true)]$Config)
+    $gate = $script:HddtSharedGate
+    if ($null -ne $gate) {
+        # Quá tải: giảm số luồng (chia đôi, sàn 1) và tăng giãn cách. Các luồng
+        # khác sẽ thấy CurrentLimit mới trước khi nhận hóa đơn kế tiếp.
+        $limit = 1
+        $delay = 0
+        Lock-HddtGate $gate
+        try {
+            $gate.AdaptiveDelayMs = [Math]::Min(10000, [Math]::Max(1000, [int]$gate.AdaptiveDelayMs * 2))
+            $gate.CurrentLimit = [Math]::Max(1, [int][Math]::Floor([int]$gate.CurrentLimit / 2))
+            $gate.SuccessStreak = 0
+            $limit = [int]$gate.CurrentLimit
+            $delay = [int]$gate.AdaptiveDelayMs
+        }
+        finally { Unlock-HddtGate $gate }
+        Write-HddtLog WARN ('[MẠNG] GDT giới hạn tốc độ; giảm còn {0} luồng, giãn cách {1} ms/request.' -f $limit, $delay)
+        return
+    }
     if (-not (Test-AdaptiveThrottleEnabled $Config)) { return }
     $currentDelay = Get-GdtRequestDelayMs $Config
     $script:AdaptiveRequestDelayMs = [Math]::Min(10000, [Math]::Max(1000, $currentDelay * 2))
@@ -104,6 +186,36 @@ function Register-GdtRateLimit {
 
 function Register-GdtRequestSuccess {
     param([Parameter(Mandatory = $true)]$Config)
+    $gate = $script:HddtSharedGate
+    if ($null -ne $gate) {
+        # Ổn định trở lại: sau một chuỗi thành công, tăng số luồng lên 1 bậc
+        # (tới trần), hoặc giảm giãn cách nếu đã ở trần.
+        $raised = $false
+        $decayed = $false
+        $limit = 1
+        $delay = 0
+        Lock-HddtGate $gate
+        try {
+            $gate.SuccessStreak = [int]$gate.SuccessStreak + 1
+            if ([int]$gate.SuccessStreak -ge 15) {
+                $gate.SuccessStreak = 0
+                if ([int]$gate.CurrentLimit -lt [int]$gate.MaxWorkers) {
+                    $gate.CurrentLimit = [int]$gate.CurrentLimit + 1
+                    $raised = $true
+                }
+                elseif ([int]$gate.AdaptiveDelayMs -gt [int]$gate.BaseDelayMs) {
+                    $gate.AdaptiveDelayMs = [Math]::Max([int]$gate.BaseDelayMs, [int][Math]::Floor([int]$gate.AdaptiveDelayMs * 0.85))
+                    $decayed = $true
+                }
+            }
+            $limit = [int]$gate.CurrentLimit
+            $delay = [int]$gate.AdaptiveDelayMs
+        }
+        finally { Unlock-HddtGate $gate }
+        if ($raised) { Write-HddtLog INFO ('[MẠNG] Kết nối ổn định; tăng lên {0} luồng tải XML.' -f $limit) }
+        elseif ($decayed) { Write-HddtLog INFO ('[MẠNG] Kết nối ổn định; giảm giãn cách xuống {0} ms/request.' -f $delay) }
+        return
+    }
     if (-not (Test-AdaptiveThrottleEnabled $Config)) { return }
     $currentDelay = Get-GdtRequestDelayMs $Config
     if ($currentDelay -le $Config.RequestDelayMs) { return }
@@ -172,6 +284,31 @@ function Get-429RetryLimit {
 
 function Wait-GdtRequestSlot {
     param([Parameter(Mandatory = $true)]$Config)
+    $gate = $script:HddtSharedGate
+    if ($null -ne $gate) {
+        # Đặt trước "khe" khởi request kế tiếp trong khi giữ khóa: các luồng
+        # nhận mốc thời gian tăng dần, nên khoảng cách tối thiểu giữa các
+        # request vẫn được giữ dù chạy song song.
+        $waitMs = 0
+        Lock-HddtGate $gate
+        try {
+            $now = [datetime]::UtcNow
+            $target = $now
+            if ($gate.LastRequestUtc -ne [datetime]::MinValue) {
+                $spacing = [datetime]$gate.LastRequestUtc + [timespan]::FromMilliseconds([int]$gate.AdaptiveDelayMs)
+                if ($spacing -gt $target) { $target = $spacing }
+            }
+            if ($gate.PauseUntilUtc -gt $target) { $target = $gate.PauseUntilUtc }
+            $gate.LastRequestUtc = $target
+            $waitMs = [int][Math]::Ceiling(($target - $now).TotalMilliseconds)
+        }
+        finally { Unlock-HddtGate $gate }
+        if ($waitMs -gt 0) {
+            Write-HddtLog DEBUG ('Giãn cách request (đa luồng): chờ {0} ms.' -f $waitMs)
+            Start-Sleep -Milliseconds $waitMs
+        }
+        return
+    }
     $requestDelayMs = Get-GdtRequestDelayMs $Config
     if ($requestDelayMs -le 0 -or $script:LastGdtRequestUtc -eq [datetime]::MinValue) { return }
 
@@ -221,6 +358,7 @@ function Invoke-GdtRequest {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $attempt = 0
     $rateLimitAttempts = 0
+    $requestToken = ''
     Reset-GdtRequestContext
     $script:LastGdtRequestUri = [string]$Uri
     while ($true) {
@@ -238,7 +376,8 @@ function Invoke-GdtRequest {
             }
             $tokenProperty = $Config.PSObject.Properties['Token']
             if (-not $SkipAuthorization -and $null -ne $tokenProperty -and -not [string]::IsNullOrWhiteSpace([string]$tokenProperty.Value)) {
-                $headers['Authorization'] = 'Bearer ' + [string]$tokenProperty.Value
+                $requestToken = [string]$tokenProperty.Value
+                $headers['Authorization'] = 'Bearer ' + $requestToken
             }
             if ($null -ne $ExtraHeaders) {
                 foreach ($headerName in $ExtraHeaders.Keys) { $headers[$headerName] = $ExtraHeaders[$headerName] }
@@ -310,6 +449,27 @@ function Invoke-GdtRequest {
                 # thử lại request này, thay vì bỏ phiên tải giữa chừng.
                 $attempt++
                 $script:LastGdtRequestAttempts = $attempt
+                $gate = $script:HddtSharedGate
+                if ($null -ne $gate) {
+                    # Đa luồng: chỉ một luồng đăng nhập lại (giữ LoginLock);
+                    # các luồng khác chờ khóa rồi dùng token mới, không cùng lúc
+                    # giải CAPTCHA hay vượt mặt nhau.
+                    [System.Threading.Monitor]::Enter($gate.LoginLock)
+                    try {
+                        if ([string]$Config.Token -eq $requestToken) {
+                            Write-HddtLog WARN ('[MẠNG] HTTP {0}; tự đăng nhập lại rồi thử tiếp.' -f $status)
+                            try {
+                                $newToken = Request-GdtSessionToken -Config $Config
+                                $Config.Token = $newToken
+                            }
+                            catch {
+                                throw "Tự đăng nhập lại sau HTTP $status thất bại: $($_.Exception.Message)"
+                            }
+                        }
+                    }
+                    finally { [System.Threading.Monitor]::Exit($gate.LoginLock) }
+                    continue
+                }
                 Write-HddtLog WARN ('[MẠNG] HTTP {0}; tự đăng nhập lại rồi thử tiếp.' -f $status)
                 try {
                     $newToken = Request-GdtSessionToken -Config $Config
@@ -337,6 +497,7 @@ function Invoke-GdtRequest {
                 $retryAfterSeconds = Get-HttpRetryAfterSeconds $_
                 $script:LastGdtRetryAfterSeconds = $retryAfterSeconds
                 $waitSeconds = Get-RetryDelaySeconds -StatusCode 429 -Attempt $rateLimitAttempts -RetryAfterSeconds $retryAfterSeconds
+                Set-GdtSharedPause -Seconds $waitSeconds
                 Write-HddtLog WARN ("[MẠNG] HTTP 429; thử lại {0}/{1} sau {2}s (độc lập MAX_RETRIES)." -f $rateLimitAttempts, (Get-429RetryLimit), $waitSeconds)
                 if (Test-HddtStopRequested) { throw 'Đã dừng theo yêu cầu; ngưng thử lại.' }
                 Start-Sleep -Seconds $waitSeconds

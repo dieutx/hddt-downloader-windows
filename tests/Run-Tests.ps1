@@ -80,6 +80,38 @@ Assert-Equal 600 (Get-RetryDelaySeconds -StatusCode 429 -Attempt 8) '429 backoff
 Assert-Equal 45 (Get-RetryDelaySeconds -StatusCode 429 -Attempt 1 -RetryAfterSeconds 45) 'Retry-After precedence'
 Assert-Equal 12 (Get-429RetryLimit) '429 retry limit is independent of MAX_RETRIES'
 
+# Gate dùng chung cho tải XML đa luồng: 429 phải giảm số luồng, chuỗi thành
+# công phải tăng lại, và cờ dừng phải lan tới các luồng.
+$gateConfig = [pscustomobject]@{ RequestDelayMs = 600; AdaptiveThrottle = $true }
+try {
+    $gate = New-HddtSharedGate -MaxWorkers 4 -BaseDelayMs 600
+    Assert-Equal 4 $gate.MaxWorkers 'Gate max workers'
+    Assert-Equal 4 $gate.CurrentLimit 'Gate starts at max concurrency'
+    Assert-Equal 600 $gate.AdaptiveDelayMs 'Gate base delay'
+    Set-HddtSharedGate $gate
+    Register-GdtRateLimit -Config $gateConfig
+    Assert-Equal 2 $gate.CurrentLimit 'Rate limit halves concurrency'
+    Assert-Equal 1200 $gate.AdaptiveDelayMs 'Rate limit doubles spacing'
+    Register-GdtRateLimit -Config $gateConfig
+    Assert-Equal 1 $gate.CurrentLimit 'Rate limit never drops below one worker'
+    for ($success = 0; $success -lt 15; $success++) { Register-GdtRequestSuccess -Config $gateConfig }
+    Assert-Equal 2 $gate.CurrentLimit 'Sustained success raises concurrency one step'
+    Set-GdtSharedPause -Seconds 5
+    Assert-Equal $true ($gate.PauseUntilUtc -gt [datetime]::UtcNow) 'Shared pause moves into the future'
+    Set-HddtStopRequest
+    Assert-Equal $true $gate.StopRequested 'Stop request reaches the shared gate'
+    Assert-Equal $true (Test-HddtStopRequested) 'Shared gate drives stop checks'
+}
+finally {
+    if ($null -ne $gate) {
+        $gate.StopRequested = $false
+        $gate.PauseUntilUtc = [datetime]::MinValue
+    }
+    Set-HddtSharedGate $null
+    Reset-HddtStopRequest
+}
+Assert-Equal $false (Test-HddtStopRequested) 'Sequential mode keeps its own stop flag'
+
 $originalGdtRequest = ${function:Invoke-GdtRequest}
 $script:IndexRequestCount = 0
 Set-Item Function:\Invoke-GdtRequest -Value {
@@ -221,6 +253,34 @@ try {
 finally {
     $zipMemory.Dispose()
     Remove-Item -LiteralPath $tempXmlDirectory -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# Tái sử dụng XML phải lọc theo tiền tố tên file để không quét toàn thư mục và
+# không nhận nhầm hóa đơn khác có chung tiền tố.
+$reuseDirectory = Join-Path ([IO.Path]::GetTempPath()) ('hddt-reuse-' + [guid]::NewGuid().ToString('N'))
+$reuseDirectionDirectory = Join-Path $reuseDirectory 'purchase'
+New-Item -ItemType Directory -Path $reuseDirectionDirectory -Force | Out-Null
+$reuseName = 'purchase_query_0107467693_1_C26ABC_123'
+Set-Content -LiteralPath (Join-Path $reuseDirectionDirectory ($reuseName + '.xml')) -Value '<HDon />' -Encoding UTF8
+Set-Content -LiteralPath (Join-Path $reuseDirectionDirectory ($reuseName + '4.xml')) -Value '<HDon />' -Encoding UTF8
+$reuseConfig = [pscustomobject]@{
+    BaseUrl = 'https://hoadondientu.gdt.gov.vn/api'; Token = 'test-token'; HttpTimeoutSeconds = 30
+    RequestDelayMs = 0; MaxRetries = 0; XmlDirectory = $reuseDirectory; RedownloadXml = $false
+}
+$reuseInvoice = [pscustomobject]@{
+    Direction = 'purchase'; Source = 'query'; SellerTaxCode = '0107467693'
+    InvoiceTemplate = '1'; InvoiceSeries = 'C26ABC'; InvoiceNumber = '123'
+}
+$originalReuseRequest = ${function:Invoke-GdtRequest}
+Set-Item Function:\Invoke-GdtRequest -Value { param($Config, $Uri, $AsBytes) throw 'Mạng không được gọi khi đang tái sử dụng XML.' }
+try {
+    $reusedXml = @(Save-GdtInvoiceXml -Config $reuseConfig -Invoice $reuseInvoice)
+    Assert-Equal 1 $reusedXml.Count 'XML resume reuses exactly the matching file'
+    Assert-Equal ($reuseName + '.xml') (Split-Path -Leaf $reusedXml[0]) 'Prefix-sharing invoice is not reused'
+}
+finally {
+    Set-Item Function:\Invoke-GdtRequest -Value $originalReuseRequest
+    Remove-Item -LiteralPath $reuseDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 function Read-TestZipEntryText {
@@ -465,6 +525,7 @@ OUTPUT_XLSX=test.xlsx
     Assert-Equal 1 $config.Directions.Count 'Direction count'
     Assert-Equal 'purchase' $config.Directions[0] 'Direction value'
     Assert-Equal 600 $config.RequestDelayMs 'Default global request delay'
+    Assert-Equal 3 $config.DownloadWorkers 'Default XML download workers'
     Assert-Equal 'info' $config.LogLevel 'Default log level'
     Assert-Equal 1 $config.ProgressEvery 'Default progress interval'
     Assert-Equal $true $config.LogToFile 'Default file logging'

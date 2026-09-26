@@ -237,6 +237,7 @@ Trên Linux/macOS dùng `pwsh -NoProfile -File Parse-LocalXml.ps1` (hoặc `pwsh
 | `OVERWRITE_OUTPUT` | Ghi đè file Excel đã có |
 | `LOOKUP_TABLE_XLSX` | Workbook `.xlsx` có sheet `LinkTraCuu` dùng để tra link tra cứu |
 | `REQUEST_DELAY_MS` | Nghỉ giữa các request |
+| `DOWNLOAD_WORKERS` | Số luồng tải XML tối đa (1-16; mặc định 3). Chương trình tự giảm khi GDT quá tải rồi tăng lại khi ổn định. Đặt 1 để tải tuần tự. |
 | `MAX_RETRIES` | Số lần thử lại lỗi mạng/5xx |
 | `HTTP_TIMEOUT_SECONDS` | Thời gian chờ một request |
 

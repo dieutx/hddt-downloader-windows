@@ -31,6 +31,7 @@ xuất Excel chỉ cần làm trong `src/ExcelExporter.ps1` và
 | `Login.ps1` | Đọc CAPTCHA SVG, giải mã thành ký tự, đăng nhập, trả token | Token chỉ trong bộ nhớ |
 | `InvoiceApi.ps1` | Danh sách hóa đơn (phân trang theo `state`), tải ZIP XML, chuỗi hóa đơn liên quan | Giữ nguyên item JSON gốc trong `GdtIndex` |
 | `XmlParser.ps1` | XML hóa đơn → `Summary` + `Details` | Đọc `local-name()` nên không phụ thuộc namespace |
+| `Parallel.ps1` | Tải + parse XML đa luồng bằng runspace pool, tự điều tiết số luồng theo tải máy chủ | Chỉ dùng khi `DOWNLOAD_WORKERS > 1`; mỗi hóa đơn xử lý đúng một lần theo chỉ số dùng chung |
 | `LinkTraCuu.ps1` | Bảng tra cứu, tên trường mã tra cứu, nhãn `tthai`/`ttxly`, nạp bảng của người dùng | Nguồn dữ liệu tham chiếu duy nhất |
 | `ExcelExporter.ps1` | Dựng workbook `.xlsx` data-only, đóng gói OPC, kiểm tra gói | Không dùng thư viện ngoài |
 
@@ -64,7 +65,17 @@ xuất ra sheet `BaoCao_LoiTaiHD`.
 ### 4. Tải và parse XML
 
 `Save-GdtInvoiceXml` tải ZIP, chỉ giữ file `.xml`, ghi ra
-`output/xml/<direction>/`. `REDOWNLOAD_XML=false` thì tận dụng lại file đã có.
+`output/xml/<direction>/`. `REDOWNLOAD_XML=false` thì tận dụng lại file đã có
+(kiểm tra tái sử dụng lọc theo tiền tố tên file để không quét toàn thư mục).
+
+Khi `DOWNLOAD_WORKERS > 1`, giai đoạn tải + parse XML chạy song song trên một
+runspace pool: mỗi hóa đơn lấy từ một chỉ số dùng chung nên xử lý đúng một lần,
+kết quả kèm `Index` rồi được gom lại theo đúng thứ tự danh sách (không trùng,
+không thiếu dòng). Giãn cách request, mốc tạm dừng khi HTTP 429 và số luồng hiện
+hành dùng chung qua một "gate" (`New-HddtSharedGate` trong `src/Http.ps1`): gặp
+429 thì giảm số luồng và tạm dừng toàn cục, khi ổn định lại thì tăng dần tới
+trần `DOWNLOAD_WORKERS`. Danh sách (phân trang theo `state`) và phần hóa đơn
+liên quan vẫn tuần tự.
 `ConvertFrom-InvoiceXml` trả về:
 
 ```text

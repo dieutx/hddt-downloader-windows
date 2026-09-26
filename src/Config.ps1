@@ -234,12 +234,14 @@ function Get-HddtConfig {
     $retries = [int](Get-EnvValue $values 'MAX_RETRIES' '4')
     $timeout = [int](Get-EnvValue $values 'HTTP_TIMEOUT_SECONDS' '90')
     $progressEvery = [int](Get-EnvValue $values 'PROGRESS_EVERY' '1')
+    $downloadWorkers = [int](Get-EnvValue $values 'DOWNLOAD_WORKERS' '3')
     $logLevel = (Get-EnvValue $values 'LOG_LEVEL' 'info').ToLowerInvariant()
     if ($pageSize -lt 1 -or $pageSize -gt 100) { throw 'PAGE_SIZE phải nằm trong khoảng 1-100.' }
     if ($delay -lt 0 -or $delay -gt 60000) { throw 'REQUEST_DELAY_MS phải nằm trong khoảng 0-60000.' }
     if ($retries -lt 0 -or $retries -gt 10) { throw 'MAX_RETRIES phải nằm trong khoảng 0-10.' }
     if ($timeout -lt 5 -or $timeout -gt 600) { throw 'HTTP_TIMEOUT_SECONDS phải nằm trong khoảng 5-600.' }
     if ($progressEvery -lt 1 -or $progressEvery -gt 1000) { throw 'PROGRESS_EVERY phải nằm trong khoảng 1-1000.' }
+    if ($downloadWorkers -lt 1 -or $downloadWorkers -gt 16) { throw 'DOWNLOAD_WORKERS phải nằm trong khoảng 1-16.' }
     if ($logLevel -notin @('debug', 'info', 'warn', 'error')) { throw 'LOG_LEVEL phải là debug, info, warn hoặc error.' }
 
     $includeRegular = ConvertTo-EnvBoolean 'INCLUDE_REGULAR' (Get-EnvValue $values 'INCLUDE_REGULAR' 'true')
@@ -306,6 +308,7 @@ function Get-HddtConfig {
         FromDate = $fromDate
         ToDate = $toDate
         PageSize = $pageSize
+        DownloadWorkers = $downloadWorkers
         RequestDelayMs = $delay
         MaxRetries = $retries
         HttpTimeoutSeconds = $timeout
