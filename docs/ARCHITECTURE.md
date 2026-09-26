@@ -71,8 +71,8 @@ theo vòng round-robin, trả kết quả kèm `PipelineIndex` để entry point
 theo đúng thứ tự hóa đơn. Worker chỉ đẩy log vào hàng đợi chung, luồng chính
 là nơi ghi ra console/file. Mỗi dòng kết quả mang `WorkerIndex`/`WorkerCount`
 nên log tiến độ hiển thị được worker nào vừa xử lý và còn bao nhiêu worker
-đang chạy; `Start-HddtXmlPipeline` ghi số worker thật sự được mở và mỗi worker
-thông báo lúc bắt đầu/kết thúc làm việc.
+đang chạy; `Start-HddtXmlPipeline` ghi số worker thật sự được mở, mỗi worker
+thông báo lúc bắt đầu/kết thúc và ghi rõ hóa đơn mình vừa nhận.
 
 Điều tiết dùng chung trong một `hashtable` đồng bộ:
 

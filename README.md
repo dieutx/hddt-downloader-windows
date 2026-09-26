@@ -249,9 +249,10 @@ Trên Linux/macOS dùng `pwsh -NoProfile -File Parse-LocalXml.ps1` (hoặc `pwsh
 Xem toàn bộ tuỳ chọn trong `.env.example`.
 
 Tải XML chạy theo pipeline: `XML_MAX_CONCURRENCY` worker cùng lúc, mỗi request
-chờ `XML_REQUEST_INTERVAL_MS`. Log ghi rõ số worker được mở và mỗi worker đang
-xử lý hóa đơn nào (dòng `[TẢI XML] ... Worker x/y | đang chạy z/y`). Bị HTTP
-429 thì hệ thống nghỉ theo `Retry-After`, giảm một kết nối (tối đa một lần mỗi
+chờ `XML_REQUEST_INTERVAL_MS`. Log ghi rõ số worker được mở, mỗi worker nhận
+hóa đơn nào (`Worker x/y nhận hóa đơn i/n: ...`) và mỗi dòng tiến độ cho biết
+worker nào vừa xong cùng số worker đang chạy (`Worker x/y | đang chạy z/y`).
+Bị HTTP 429 thì hệ thống nghỉ theo `Retry-After`, giảm một kết nối (tối đa một lần mỗi
 30s để một hóa đơn retry không kéo tụt cả pool) và tăng khoảng cách; khi đã im
 429 đủ lâu (`XML_RECOVERY_STEP_SECONDS`, mặc định 10s mỗi bước), khoảng cách
 được giảm một nửa về mức `XML_REQUEST_INTERVAL_MS` rồi mới tăng lại kết nối,
