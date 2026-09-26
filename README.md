@@ -10,6 +10,10 @@ Công cụ PowerShell để tải **XML hóa đơn điện tử** từ GDT và x
 <img width="1044" height="560" alt="image" src="https://github.com/user-attachments/assets/c0268a28-88ca-4e80-9df8-a0aa984faaa1" />
 
 ---
+## 📺 Video hướng dẫn
+
+👉 [Xem video hướng dẫn sử dụng](https://www.youtube.com/watch?v=nLWvosy-IM0)
+
 
 ## 1. Chạy nhanh trên Windows
 
