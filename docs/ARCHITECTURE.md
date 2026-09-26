@@ -28,6 +28,8 @@ xuất Excel chỉ cần làm trong `src/ExcelExporter.ps1` và
 | `Logging.ps1` | Log có mức độ, ghi file UTF-8, cờ dừng an toàn (Ctrl+C) | Không phụ thuộc module khác |
 | `Config.ps1` | Đọc `.env`, chuẩn hoá và kiểm tra giá trị, dựng object cấu hình | `Get-HddtConfig` là hợp đồng của cả hai entry point |
 | `Http.ps1` | `Invoke-GdtRequest`: thêm `Authorization`, proxy, retry, backoff 429, log mạng | 429 có lịch riêng, không phụ thuộc `MAX_RETRIES` |
+| `BrowserProfile.ps1` | Một User-Agent + `sec-ch-ua` + locale cho cả phiên, header theo từng endpoint | Nguồn duy nhất của `User-Agent`, `Referer`, `Accept-Language` |
+| `XmlScheduler.ps1` | Trạng thái dùng chung, slot/giãn cách tải XML, pipeline runspace | Điều tiết theo HTTP 429, log của worker được đẩy về luồng chính |
 | `Login.ps1` | Đọc CAPTCHA SVG, giải mã thành ký tự, đăng nhập, trả token | Token chỉ trong bộ nhớ |
 | `InvoiceApi.ps1` | Danh sách hóa đơn (phân trang theo `state`), tải ZIP XML, chuỗi hóa đơn liên quan | Giữ nguyên item JSON gốc trong `GdtIndex` |
 | `XmlParser.ps1` | XML hóa đơn → `Summary` + `Details` | Đọc `local-name()` nên không phụ thuộc namespace |
@@ -63,6 +65,24 @@ xuất ra sheet `BaoCao_LoiTaiHD`.
 
 ### 4. Tải và parse XML
 
+`Invoke-Hddt.ps1` không tải tuần tự từng hóa đơn nữa mà giao cho pipeline của
+`XmlScheduler.ps1`: mỗi worker là một runspace chạy `Get-GdtXmlDownloadResult`
+theo vòng round-robin, trả kết quả kèm `PipelineIndex` để entry point ghi lại
+theo đúng thứ tự hóa đơn. Worker chỉ đẩy log vào hàng đợi chung, luồng chính
+là nơi ghi ra console/file.
+
+Điều tiết dùng chung trong một `hashtable` đồng bộ:
+
+- `Enter-GdtXmlRequestSlot` giữ đúng `XML_CONCURRENCY` kết nối và giãn cách
+  `XML_REQUEST_INTERVAL_MS` giữa hai request;
+- HTTP 429 gọi `Register-GdtXmlRateLimit`: nghỉ theo `Retry-After` (không có
+  thì dùng `COOLDOWN_FALLBACK_SECONDS`, mặc định 15s), giảm một kết nối và
+  tăng khoảng cách 1.5 lần;
+- sau 25 request thành công liên tiếp, `Register-GdtXmlSuccess` giảm khoảng
+  cách về 85%, rồi tăng lại kết nối, không vượt `XML_MAX_CONCURRENCY`;
+- cờ `StopRequested` trong trạng thái chung để Ctrl+C dừng mọi worker sau
+  request hiện tại.
+
 `Save-GdtInvoiceXml` tải ZIP, chỉ giữ file `.xml`, ghi ra
 `output/xml/<direction>/`. `REDOWNLOAD_XML=false` thì tận dụng lại file đã có.
 `ConvertFrom-InvoiceXml` trả về:
@@ -95,6 +115,15 @@ file cũ. Hàm trả về thống kê (số dòng, số link tra cứu tìm đư
 ghi log.
 
 Chi tiết về workbook: `EXCEL_FORMAT.md`.
+
+### 7. Header HTTP theo endpoint
+
+Mọi request đi qua `Get-GdtRequestHeaders` trong `BrowserProfile.ps1`: một
+`User-Agent` (mặc định là Edge, đổi bằng `BROWSER_USER_AGENT`), `sec-ch-ua`
+sinh từ chính UA đó, `Accept-Language` tiếng Việt và `Referer` theo endpoint
+(trang chủ cho captcha/đăng nhập, trang tra cứu cho danh sách/tải XML).
+`Request-Id` vẫn sinh mới cho từng request. `LOG_HTTP_PROFILE=true` chỉ in ra
+nhóm header an toàn, không bao giờ in `Authorization` hay `Cookie`.
 
 ## Điểm mở rộng
 

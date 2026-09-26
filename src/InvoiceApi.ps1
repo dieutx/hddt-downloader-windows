@@ -125,7 +125,7 @@ function Get-GdtInvoiceIndex {
                     }
 
                     $pageWatch = [Diagnostics.Stopwatch]::StartNew()
-                    $payload = (Invoke-GdtRequest -Config $Config -Uri $uri) | ConvertFrom-Json
+                    $payload = (Invoke-GdtRequest -Config $Config -Uri $uri -RequestProfile 'InvoiceQuery') | ConvertFrom-Json
                     $pageWatch.Stop()
                     $datasProperty = if ($null -eq $payload) { $null } else { $payload.PSObject.Properties['datas'] }
                     if ($null -eq $datasProperty -or $null -eq $datasProperty.Value) {
@@ -488,6 +488,7 @@ function Get-GdtInvoiceRelation {
         $relativeUri = Get-GdtRelationUri -Config $Config -Invoice $Invoice -EndpointName 'relative'
         try {
             $relativeText = Invoke-GdtRequest -Config $Config -Uri $relativeUri `
+                -RequestProfile 'InvoiceRelation' `
                 -ExtraHeaders (Get-GdtRelationHeaders -EndpointName 'relative' -Source $Invoice.Source -Direction $Invoice.Direction)
             $relation.RelatedChain = ConvertTo-RelativeChainText -ResponseText $relativeText -Invoice $Invoice
             Write-HddtLog DEBUG ('Đã lấy chuỗi hóa đơn liên quan: {0}' -f (Get-InvoiceLabel $Invoice))
@@ -503,6 +504,7 @@ function Get-GdtInvoiceRelation {
         $relatedUri = Get-GdtRelationUri -Config $Config -Invoice $Invoice -EndpointName 'related'
         try {
             $relatedText = Invoke-GdtRequest -Config $Config -Uri $relatedUri `
+                -RequestProfile 'InvoiceRelation' `
                 -ExtraHeaders (Get-GdtRelationHeaders -EndpointName 'related' -Source $Invoice.Source -Direction $Invoice.Direction)
             $relation.RelatedInfo = ConvertTo-RelatedInformationText -ResponseText $relatedText
             Write-HddtLog DEBUG ('Đã lấy thông tin liên quan: {0}' -f (Get-InvoiceLabel $Invoice))
@@ -626,7 +628,7 @@ function Save-GdtInvoiceXml {
         Write-HddtLog DEBUG ('Tái sử dụng {0} XML đã tải trong thư mục {1}.' -f $existingXmlFiles.Count, $directionDirectory)
         return $existingXmlFiles
     }
-    $responseBytes = [byte[]](Invoke-GdtRequest -Config $Config -Uri $uri -AsBytes)
+    $responseBytes = [byte[]](Invoke-GdtRequest -Config $Config -Uri $uri -AsBytes -RequestProfile 'ExportXml')
     try {
         $xmlFiles = @(Expand-InvoiceXmlBytes -Bytes $responseBytes -DestinationDirectory $directionDirectory -FileNamePrefix $baseName)
     }

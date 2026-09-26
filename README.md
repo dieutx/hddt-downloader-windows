@@ -239,8 +239,20 @@ Trên Linux/macOS dùng `pwsh -NoProfile -File Parse-LocalXml.ps1` (hoặc `pwsh
 | `REQUEST_DELAY_MS` | Nghỉ giữa các request |
 | `MAX_RETRIES` | Số lần thử lại lỗi mạng/5xx |
 | `HTTP_TIMEOUT_SECONDS` | Thời gian chờ một request |
+| `XML_CONCURRENCY` | Số kết nối tải XML chạy song song (1-10, mặc định 2) |
+| `XML_MAX_CONCURRENCY` | Trần kết nối sau khi phục hồi từ HTTP 429 |
+| `XML_REQUEST_INTERVAL_MS` | Giãn cách giữa hai request XML (mặc định 800 ms) |
+| `BROWSER_USER_AGENT` | User-Agent gửi kèm; để trống dùng mặc định của trình duyệt |
+| `LOG_HTTP_PROFILE` | In log nhóm header an toàn của request để chẩn đoán |
 
 Xem toàn bộ tuỳ chọn trong `.env.example`.
+
+Tải XML chạy theo pipeline: `XML_CONCURRENCY` request cùng lúc, mỗi request chờ
+`XML_REQUEST_INTERVAL_MS`. Bị HTTP 429 thì hệ thống nghỉ theo `Retry-After`,
+giảm một kết nối và tăng khoảng cách; sau 25 request thành công liên tiếp thì
+giảm khoảng cách, rồi tăng lại kết nối, không bao giờ vượt
+`XML_MAX_CONCURRENCY`. Chạy với `XML_CONCURRENCY=1` để giữ hành vi tuần tự
+cũ.
 
 ---
 

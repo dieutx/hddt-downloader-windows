@@ -106,7 +106,7 @@ function Get-GdtCaptcha {
     param([Parameter(Mandatory = $true)]$Config)
 
     $uri = '{0}/captcha' -f $Config.BaseUrl
-    $responseText = Invoke-GdtRequest -Config $Config -Uri $uri -SkipAuthorization
+    $responseText = Invoke-GdtRequest -Config $Config -Uri $uri -SkipAuthorization -RequestProfile 'Captcha'
     $key = ''
     $content = ''
     try {
@@ -173,7 +173,7 @@ function Invoke-GdtLogin {
 
         try {
             $responseText = Invoke-GdtRequest -Config $Config -Uri $uri -Method Post -Body $body `
-                -ContentType 'application/json' -SkipAuthorization
+                -ContentType 'application/json' -SkipAuthorization -RequestProfile 'Login'
         }
         catch {
             if (Test-HddtStopRequested) { throw }
