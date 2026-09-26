@@ -110,18 +110,16 @@ $script:SourceErrorWidths = @(
     45.7109375, 14.7109375, 13.7109375, 24.7109375, 35.7109375
 )
 
-$script:SourceStatusLabels = @(
-    'Tất cả', 'Hóa đơn mới', 'Hóa đơn thay thế', 'Hóa đơn điều chỉnh',
-    'Hóa đơn bị thay thế', 'Hóa đơn đã bị điều chỉnh', 'Hóa đơn bị hủy'
-)
+# Nhãn trạng thái hóa đơn và kết quả kiểm tra lấy từ sheet LinkTraCuu
+# (I2:I8 và O2:O11) nên không thể lệch khỏi bảng tra cứu.
+$script:SourceStatusLabels = @(Get-TaiHoaDonDienTuStatusLabels)
+$script:SourceValidationLabels = @(Get-TaiHoaDonDienTuValidationLabels)
 
-# This is the O2:O11 lookup used by modGhiExcel.bas.  The VBA project keeps
-# this lookup in the LinkTraCuu sheet; the data-only port keeps the same order.
-$script:SourceValidationLabels = @(
-    'Tất cả', 'Đã cấp mã hóa đơn', 'Tổng cục thuế đã nhận không mã',
-    'Tổng cục thuế đã nhận hóa đơn có mã khởi tạo từ máy tính tiền', '', '', '',
-    'Tổng cục thuế đã nhận không mã', 'Đã kiểm tra HĐĐT định kỳ không có mã',
-    'Tổng cục thuế đã nhận hóa đơn có mã khởi tạo từ máy tính tiền'
+# Sheet LinkTraCuu: bảng định tuyến link tra cứu được ghi kèm workbook để
+# người dùng tự thêm/sửa, và chính bảng này sinh ra link ở cột 55/56.
+$script:SourceLookupHeaders = @(Get-TaiHoaDonDienTuLookupHeaders)
+$script:SourceLookupWidths = @(
+    46, 14, 14, 62, 22, 40, 3, 10, 30, 3, 10, 46, 3, 10, 60
 )
 
 function Get-ExcelColumnName {
@@ -260,18 +258,50 @@ function Get-ExcelLookupCode {
     return ''
 }
 
+# Chọn MST dùng để tra bảng LinkTraCuu.  Ưu tiên MSTTCGP (nhà cung cấp T-VAN
+# do GDT trả về).  Khi GDT không trả MSTTCGP - hóa đơn phát hành trực tiếp
+# qua MSSVĐHĐN, hoặc XML không có TTChung/MSTTCGP - thử lần lượt MST của các
+# bên liên quan; nếu bên đó đúng là một nhà cung cấp trong bảng LinkTraCuu thì
+# trang tra cứu của họ vẫn dùng được cho hóa đơn này.
+function Resolve-ExcelLookupTaxCode {
+    param([string]$ProviderTaxCode, [string[]]$CounterPartyTaxCodes)
+    if (-not [string]::IsNullOrWhiteSpace($ProviderTaxCode)) {
+        return $ProviderTaxCode.Trim()
+    }
+    foreach ($taxCode in @(Get-ExcelAdditionalItems $CounterPartyTaxCodes)) {
+        $candidate = ([string]$taxCode).Trim()
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        if (-not [string]::IsNullOrWhiteSpace((Get-TaiHoaDonDienTuSellerLookupLink $candidate))) { return $candidate }
+        if (-not [string]::IsNullOrWhiteSpace((Get-TaiHoaDonDienTuLookupLink $candidate))) { return $candidate }
+    }
+    return ''
+}
+
 function Get-ExcelLookupLink {
     param(
         [string]$ProviderTaxCode,
         [string]$SellerTaxCode,
         [string]$TaxAuthorityCode,
         [string]$InvoiceId,
+        [string[]]$CounterPartyTaxCodes = @(),
         [ValidateSet('summary', 'detail', 'xml')][string]$Mode = 'summary'
     )
-    if ([string]::IsNullOrWhiteSpace($ProviderTaxCode)) {
+    $lookupTaxCode = Resolve-ExcelLookupTaxCode -ProviderTaxCode $ProviderTaxCode -CounterPartyTaxCodes $CounterPartyTaxCodes
+    if ([string]::IsNullOrWhiteSpace($lookupTaxCode)) {
         if ($SellerTaxCode -in @('0110269067', '0110269067-002')) {
             return 'https://gsm-einvoice.hilo.com.vn/'
         }
+        if ($Mode -eq 'xml') { return 'Khong tim thay link tra cuu' }
+        return 'Khong co link tra cuu'
+    }
+
+    # Đường dẫn tìm được nhờ MST bên liên quan: dùng link của chính MST đó,
+    # kể cả link riêng theo người bán (cột C của sheet LinkTraCuu).
+    if ([string]::IsNullOrWhiteSpace($ProviderTaxCode)) {
+        $sellerLink = Get-TaiHoaDonDienTuSellerLookupLink $lookupTaxCode
+        if (-not [string]::IsNullOrWhiteSpace($sellerLink)) { return $sellerLink }
+        $counterPartyLink = Get-TaiHoaDonDienTuLookupLink $lookupTaxCode
+        if (-not [string]::IsNullOrWhiteSpace($counterPartyLink)) { return $counterPartyLink }
         if ($Mode -eq 'xml') { return 'Khong tim thay link tra cuu' }
         return 'Khong co link tra cuu'
     }
@@ -327,11 +357,14 @@ function Get-ExcelStatusLabel {
 }
 
 function Get-ExcelValidationLabel {
+    # Ô đầu tiên của O2:O11 là 'Tất cả', VBA tra bằng ttxly + 2 (mảng 1-based)
+    # nên ttxly N ứng với chỉ số N + 1.
     param($Value)
     $number = 0
     if (-not [int]::TryParse([string]$Value, [ref]$number)) { return '' }
-    if ($number -lt 0 -or $number -ge $script:SourceValidationLabels.Count) { return '' }
-    return $script:SourceValidationLabels[$number]
+    $index = $number + 1
+    if ($index -lt 0 -or $index -ge $script:SourceValidationLabels.Count) { return '' }
+    return $script:SourceValidationLabels[$index]
 }
 
 function New-ExcelDataRow {
@@ -501,10 +534,11 @@ function New-ExcelSummaryRows {
         Set-ExcelDataCell $row 53 (Get-ExcelValidationLabel $validation) 5
 
         $seller = [string](Get-ExcelRawOrFallback $raw $summary 'nbmst' @('SellerTaxCode'))
+        $buyer = [string](Get-ExcelRawOrFallback $raw $summary 'nmmst' @('BuyerTaxCode'))
         $authority = [string](Get-ExcelRawOrFallback $raw $summary 'mhdon' @('TaxAuthorityCode'))
         $provider = [string](Get-ExcelRawOrFallback $raw $summary 'msttcgp' @('ProviderTaxCode'))
         $invoiceId = [string](Get-ExcelRawOrFallback $raw $summary 'id' @('InvoiceId'))
-        $link = Get-ExcelLookupLink -ProviderTaxCode $provider -SellerTaxCode $seller -TaxAuthorityCode $authority -InvoiceId $invoiceId -Mode summary
+        $link = Get-ExcelLookupLink -ProviderTaxCode $provider -SellerTaxCode $seller -TaxAuthorityCode $authority -InvoiceId $invoiceId -CounterPartyTaxCodes @($seller, $buyer) -Mode summary
         $lookupCode = Get-ExcelLookupCode @(
             (Get-ExcelObjectValue $raw 'cttkhac' @()),
             (Get-ExcelObjectValue $raw 'ttkhac' @()),
@@ -625,7 +659,7 @@ function New-ExcelDetailRows {
         $summary = $group.Summary
         $values = Get-ExcelCommonValues $summary
         $provider = $values.ProviderTaxCode
-        $link = Get-ExcelLookupLink -ProviderTaxCode $provider -SellerTaxCode $values.SellerTaxCode -TaxAuthorityCode $values.TaxAuthorityCode -InvoiceId $values.InvoiceId -Mode detail
+        $link = Get-ExcelLookupLink -ProviderTaxCode $provider -SellerTaxCode $values.SellerTaxCode -TaxAuthorityCode $values.TaxAuthorityCode -InvoiceId $values.InvoiceId -CounterPartyTaxCodes @($values.SellerTaxCode, $values.BuyerTaxCode) -Mode detail
         $lookupCode = Get-ExcelText $summary 'LookupCode' ''
         if ([string]::IsNullOrWhiteSpace($lookupCode)) {
             $lookupCode = Get-ExcelLookupCode @(
@@ -699,7 +733,7 @@ function New-ExcelXmlRows {
         $summary = $group.Summary
         $values = Get-ExcelCommonValues $summary
         $provider = $values.ProviderTaxCode
-        $link = Get-ExcelLookupLink -ProviderTaxCode $provider -SellerTaxCode $values.SellerTaxCode -TaxAuthorityCode $values.TaxAuthorityCode -InvoiceId $values.InvoiceId -Mode xml
+        $link = Get-ExcelLookupLink -ProviderTaxCode $provider -SellerTaxCode $values.SellerTaxCode -TaxAuthorityCode $values.TaxAuthorityCode -InvoiceId $values.InvoiceId -CounterPartyTaxCodes @($values.SellerTaxCode, $values.BuyerTaxCode) -Mode xml
         $lookupCode = Get-ExcelText $summary 'LookupCode' ''
         if ([string]::IsNullOrWhiteSpace($lookupCode)) {
             $lookupCode = Get-ExcelLookupCode @(
@@ -830,6 +864,43 @@ function New-ExcelErrorRows {
             elseif ($column -eq 9) { $style = 15 }
             elseif ($column -in @(5, 6, 7, 8, 12, 14, 15)) { $style = 5 }
             Set-ExcelDataCell $row $column $values[$column - 1] $style
+        }
+        $result.Add($row)
+    }
+    return $result.ToArray()
+}
+
+# Nạp bảng LinkTraCuu do người dùng cung cấp (LOOKUP_TABLE_XLSX).  Các dòng
+# thêm vào được ghi lại vào sheet LinkTraCuu của workbook xuất và dùng để tạo
+# link tra cứu, nên người dùng sửa bảng trong Excel là link trong workbook mới
+# đổi theo.
+function Import-ExcelLookupTable {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return 0 }
+    $imported = Import-TaiHoaDonDienTuLookupTable -Path $Path
+    $script:SourceStatusLabels = @(Get-TaiHoaDonDienTuStatusLabels)
+    $script:SourceValidationLabels = @(Get-TaiHoaDonDienTuValidationLabels)
+    return $imported
+}
+
+# Sheet LinkTraCuu: ghi lại nguyên bảng định tuyến tra cứu để người dùng thấy
+# và tự sửa link.  Bảng này cũng chính là nguồn sinh link ở cột 55/56.
+function New-ExcelLookupRows {
+    $result = New-Object System.Collections.Generic.List[object]
+    foreach ($source in @(Get-TaiHoaDonDienTuLookupSheetRows)) {
+        $row = New-ExcelDataRow
+        for ($column = 0; $column -lt $script:TaiHoaDonDienTuLookupColumns.Count; $column++) {
+            $letter = $script:TaiHoaDonDienTuLookupColumns[$column]
+            $value = Get-TaiHoaDonDienTuLookupCell $source $letter
+            if ([string]::IsNullOrWhiteSpace($value)) { continue }
+            $index = $column + 1
+            $style = if ($index -eq 2 -or $index -eq 3) { 16 } else { 5 }
+            $hyperlink = ''
+            if ($index -eq 4 -and $value -match '^https?://') {
+                $style = 10
+                $hyperlink = $value
+            }
+            Set-ExcelDataCell $row $index $value $style $hyperlink
         }
         $result.Add($row)
     }
@@ -1161,7 +1232,10 @@ function Export-InvoiceWorkbook {
         [Parameter(Mandatory = $true)]$SummaryRows,
         [Parameter(Mandatory = $true)]$DetailRows,
         [Parameter(Mandatory = $true)]$ErrorRows,
-        [switch]$Overwrite
+        [switch]$Overwrite,
+        # Workbook .xlsx có sheet 'LinkTraCuu' do người dùng sửa; các dòng
+        # MST/link trong đó được nối vào bảng tra cứu dùng cho file này.
+        [string]$LookupTablePath = ''
     )
 
     if ((Test-Path -LiteralPath $Path) -and -not $Overwrite) {
@@ -1171,6 +1245,11 @@ function Export-InvoiceWorkbook {
     if ([string]::IsNullOrWhiteSpace($parent)) { $parent = (Get-Location).Path }
     if (-not (Test-Path -LiteralPath $parent)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+
+    $importedLookupRows = 0
+    if (-not [string]::IsNullOrWhiteSpace($LookupTablePath)) {
+        $importedLookupRows = Import-ExcelLookupTable -Path $LookupTablePath
     }
 
     $summaryData = New-ExcelSummaryRows $SummaryRows
@@ -1191,7 +1270,8 @@ function Export-InvoiceWorkbook {
         [pscustomobject]@{ Name='TongHopHD_Ban'; Title='HÓA ĐƠN BÁN'; Headers=$script:SourceSummaryHeaders; Rows=$soldSummary; Widths=$script:SourceSummaryWidths; HeaderStyle=2; HeaderRow=2; DataStartRow=3; Freeze=$true; Filter=$false },
         [pscustomobject]@{ Name='ChiTietHD_Ban'; Title='HÓA ĐƠN BÁN - CHI TIẾT'; Headers=$script:SourceDetailHeaders; Rows=$soldDetail; Widths=$script:SourceDetailWidths; HeaderStyle=3; HeaderRow=2; DataStartRow=3; Freeze=$true; Filter=$false },
         [pscustomobject]@{ Name='ChiTietHD_Ban_XML'; Title='HÓA ĐƠN BÁN - CHI TIẾT - XML'; Headers=$script:SourceXmlHeadersSold; Rows=$soldXml; Widths=$script:SourceXmlWidths; HeaderStyle=4; HeaderRow=2; DataStartRow=3; Freeze=$true; Filter=$false },
-        [pscustomobject]@{ Name='BaoCao_LoiTaiHD'; Title=''; Headers=$script:SourceErrorHeaders; Rows=$errorData; Widths=$script:SourceErrorWidths; HeaderStyle=13; HeaderRow=1; DataStartRow=2; Freeze=$true; Filter=$true }
+        [pscustomobject]@{ Name='BaoCao_LoiTaiHD'; Title=''; Headers=$script:SourceErrorHeaders; Rows=$errorData; Widths=$script:SourceErrorWidths; HeaderStyle=13; HeaderRow=1; DataStartRow=2; Freeze=$true; Filter=$true },
+        [pscustomobject]@{ Name='LinkTraCuu'; Title=''; Headers=$script:SourceLookupHeaders; Rows=(New-ExcelLookupRows); Widths=$script:SourceLookupWidths; HeaderStyle=2; HeaderRow=1; DataStartRow=2; Freeze=$true; Filter=$false }
     )
 
     $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('hddt-xlsx-' + [guid]::NewGuid().ToString('N'))
@@ -1295,5 +1375,23 @@ function Export-InvoiceWorkbook {
         }
         if (Test-Path -LiteralPath $stagingPath) { Remove-Item -LiteralPath $stagingPath -Force -ErrorAction SilentlyContinue }
         if (Test-Path -LiteralPath $backupPath) { Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue }
+    }
+
+    # Báo lại để người dùng thấy ngay bao nhiêu hóa đơn tìm được link tra cứu;
+    # phần còn lại là hóa đơn không có nhà cung cấp T-VAN trong bảng LinkTraCuu.
+    $summaryRowList = @($purchaseSummary) + @($soldSummary)
+    $linkedCount = 0
+    foreach ($summaryRow in $summaryRowList) {
+        if (-not $summaryRow.Cells.ContainsKey(55)) { continue }
+        if (([string]$summaryRow.Cells[55].Value) -match '^https?://') { $linkedCount++ }
+    }
+    return [pscustomobject]@{
+        Path = $Path
+        SummaryRows = $summaryRowList.Count
+        DetailRows = @($purchaseDetail).Count + @($soldDetail).Count
+        LinksResolved = $linkedCount
+        LinksMissing = $summaryRowList.Count - $linkedCount
+        LookupSheetRows = @(Get-TaiHoaDonDienTuLookupSheetRows).Count
+        ImportedLookupRows = $importedLookupRows
     }
 }

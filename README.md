@@ -161,19 +161,47 @@ output/
   logs/
 ```
 
-Workbook gồm 7 sheet dữ liệu:
+Workbook gồm 8 sheet:
 
 | Sheet | Nội dung |
 |---|---|
 | `TongHopHD_Mua` | Tổng hợp hóa đơn mua vào |
-| `TongHopHD_Ban` | Tổng hợp hóa đơn bán ra |
 | `ChiTietHD_Mua` | Chi tiết dữ liệu mua vào |
-| `ChiTietHD_Ban` | Chi tiết dữ liệu bán ra |
 | `ChiTietHD_Mua_XML` | Chi tiết đọc trực tiếp từ XML mua vào |
+| `TongHopHD_Ban` | Tổng hợp hóa đơn bán ra |
+| `ChiTietHD_Ban` | Chi tiết dữ liệu bán ra |
 | `ChiTietHD_Ban_XML` | Chi tiết đọc trực tiếp từ XML bán ra |
 | `BaoCao_LoiTaiHD` | Các lỗi tải/parse và kết quả xử lý |
+| `LinkTraCuu` | Bảng định tuyến link tra cứu hóa đơn |
 
-File Excel không có VBA, `MENU`, `Thamkhao` hay `LinkTraCuu`.
+File Excel không có VBA, `MENU` hay `Thamkhao`.
+
+### Link tra cứu hóa đơn
+
+Cột **Link tra cứu** (cột 55) và **Mã tra cứu** (cột 56) của `TongHopHD_Mua`/`TongHopHD_Ban` được sinh từ sheet `LinkTraCuu`:
+
+| Cột | Ý nghĩa |
+|---|---|
+| A | Tên tổ chức |
+| B | MST nhà cung cấp dịch vụ T-VAN (MSTTCGP) |
+| C | MST người bán cần link riêng (ưu tiên hơn link chung) |
+| D | Link tra cứu |
+| E | Tên trường trong `TTKhac` chứa mã tra cứu |
+| F | Ghi chú |
+
+Thứ tự ưu tiên khi sinh link:
+
+1. `MSTTCGP` do GDT trả về, hoặc `TTChung/MSTTCGP` trong XML.
+2. Nếu không có, tra MST của người bán/người mua trong bảng `LinkTraCuu`: hóa đơn phát hành trực tiếp qua MSSVĐHĐN thường không có MSTTCGP, nhưng bên kia vẫn có thể là một nhà cung cấp có trong bảng.
+3. Không tra được thì ghi `Khong co link tra cuu`, đúng như bản gốc.
+
+Muốn tự thêm/sửa link (nhà cung cấp mới, hoặc MST chi nhánh), mở file Excel đã xuất, sửa sheet `LinkTraCuu`, lưu lại rồi trỏ biến sau vào file đó:
+
+```dotenv
+LOOKUP_TABLE_XLSX=output/HoaDonDienTu.xlsx
+```
+
+Các dòng trong bảng đó được nối vào bảng gốc (dòng cuối thắng) rồi ghi lại vào workbook của lần chạy tiếp theo, nên sửa bao nhiêu lần cũng không nhân bản bảng.
 
 ---
 
@@ -206,6 +234,7 @@ Trên Linux/macOS dùng `pwsh -NoProfile -File Parse-LocalXml.ps1` (hoặc `pwsh
 | `FETCH_RELATED` | Lấy chuỗi hóa đơn thay thế/điều chỉnh |
 | `REDOWNLOAD_XML` | Tái sử dụng XML đã tải hoặc tải lại |
 | `OVERWRITE_OUTPUT` | Ghi đè file Excel đã có |
+| `LOOKUP_TABLE_XLSX` | Workbook `.xlsx` có sheet `LinkTraCuu` dùng để tra link tra cứu |
 | `REQUEST_DELAY_MS` | Nghỉ giữa các request |
 | `MAX_RETRIES` | Số lần thử lại lỗi mạng/5xx |
 | `HTTP_TIMEOUT_SECONDS` | Thời gian chờ một request |
