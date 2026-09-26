@@ -1,4 +1,4 @@
-# Bảng tra cứu hóa đơn điện tử, chuyển từ sheet LinkTraCuu của
+﻿# Bảng tra cứu hóa đơn điện tử, chuyển từ sheet LinkTraCuu của
 # TaiHoaDonDienTu.  Đây là dữ liệu tham chiếu công khai: MST của nhà cung
 # cấp dịch vụ T-VAN và địa chỉ trang tra cứu của nhà cung cấp đó.
 #

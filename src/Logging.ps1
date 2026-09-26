@@ -53,16 +53,29 @@ function Write-HddtLog {
     $normalizedLevel = $Level.ToUpperInvariant()
     if ($script:HddtLevelRank[$normalizedLevel] -lt $script:HddtLevelRank[$script:HddtLogLevel]) { return }
 
-    $consoleLine = '[{0}] [{1,-5}] {2}' -f (Get-Date -Format 'HH:mm:ss'), $normalizedLevel, $Message
-    switch ($normalizedLevel) {
-        'WARN' { Write-Host $consoleLine -ForegroundColor Yellow }
-        'ERROR' { Write-Host $consoleLine -ForegroundColor Red }
-        default { Write-Host $consoleLine }
-    }
+    # Khi tải XML đa luồng, nhiều runspace cùng ghi log: khóa chung để không
+    # trộn dòng và không đụng nhau khi ghi file.
+    $logLock = $null
+    if ($null -ne $script:HddtSharedGate) { $logLock = $script:HddtSharedGate.LogLock }
+    if ($null -ne $logLock) { [System.Threading.Monitor]::Enter($logLock) }
+    try {
+        $consoleLine = '[{0}] [{1,-5}] {2}' -f (Get-Date -Format 'HH:mm:ss'), $normalizedLevel, $Message
+        try {
+            switch ($normalizedLevel) {
+                'WARN' { Write-Host $consoleLine -ForegroundColor Yellow }
+                'ERROR' { Write-Host $consoleLine -ForegroundColor Red }
+                default { Write-Host $consoleLine }
+            }
+        }
+        catch { }
 
-    if ($script:HddtLogToFile -and -not [string]::IsNullOrWhiteSpace($script:HddtLogFile)) {
-        $fileLine = '[{0}] [{1,-5}] {2}{3}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $normalizedLevel, $Message, [Environment]::NewLine
-        [IO.File]::AppendAllText($script:HddtLogFile, $fileLine, (New-Object Text.UTF8Encoding($false)))
+        if ($script:HddtLogToFile -and -not [string]::IsNullOrWhiteSpace($script:HddtLogFile)) {
+            $fileLine = '[{0}] [{1,-5}] {2}{3}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $normalizedLevel, $Message, [Environment]::NewLine
+            [IO.File]::AppendAllText($script:HddtLogFile, $fileLine, (New-Object Text.UTF8Encoding($false)))
+        }
+    }
+    finally {
+        if ($null -ne $logLock) { [System.Threading.Monitor]::Exit($logLock) }
     }
 }
 

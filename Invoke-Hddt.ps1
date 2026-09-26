@@ -14,6 +14,7 @@ if ([string]::IsNullOrWhiteSpace($EnvFile)) { $EnvFile = Join-Path $PSScriptRoot
 . (Join-Path $PSScriptRoot 'src\Http.ps1')
 . (Join-Path $PSScriptRoot 'src\InvoiceApi.ps1')
 . (Join-Path $PSScriptRoot 'src\XmlParser.ps1')
+. (Join-Path $PSScriptRoot 'src\Parallel.ps1')
 . (Join-Path $PSScriptRoot 'src\ExcelExporter.ps1')
 . (Join-Path $PSScriptRoot 'src\Login.ps1')
 
@@ -41,6 +42,45 @@ function Merge-HddtParsedSummary {
     if ([string]::IsNullOrWhiteSpace([string](Get-ObjectValue $Target 'XmlFile' ''))) {
         Set-HddtObjectValue $Target 'XmlFile' $Parsed.XmlFile
     }
+}
+
+# Áp kết quả tải/parse XML của một hóa đơn vào dòng tổng hợp đã dựng sẵn.
+# Hóa đơn lỗi (trừ khi do dừng theo yêu cầu) sinh một dòng báo cáo lỗi.
+function Add-HddtInvoiceResult {
+    param($Binding, $Result)
+    $summary = $Binding.Summary
+    $invoice = $Binding.Invoice
+    if ($Result.Ok) {
+        $firstXml = $true
+        foreach ($parsed in @($Result.Parsed)) {
+            if ($firstXml) {
+                Merge-HddtParsedSummary -Target $summary -Parsed $parsed.Summary
+                $firstXml = $false
+            }
+            foreach ($row in @($parsed.Details)) { $Binding.DetailRows.Add($row) }
+        }
+        return
+    }
+    if ($Result.Stopped) { return }
+    $Binding.ErrorRow = [pscustomobject]@{
+        Direction = $invoice.Direction
+        Source = $invoice.Source
+        SellerTaxCode = $invoice.SellerTaxCode
+        InvoiceTemplate = $invoice.InvoiceTemplate
+        InvoiceSeries = $invoice.InvoiceSeries
+        InvoiceNumber = $invoice.InvoiceNumber
+        InvoiceDate = $invoice.InvoiceDate
+        Stage = [string]$Result.Stage
+        Endpoint = [string]$Result.Endpoint
+        StatusCode = [int]$Result.StatusCode
+        Attempts = [int]$Result.Attempts
+        RetryAfterSeconds = [int]$Result.RetryAfterSeconds
+        RecordedAt = [datetime]::Now
+        Error = [string]$Result.Error
+        FinalResult = 'Không tải được'
+        Note = ''
+    }
+    Write-HddtLog WARN ('[TẢI XML] Không tải được {0}: {1}' -f (Get-InvoiceLabel -Invoice $invoice), $Result.Error)
 }
 
 # Quy ước log INFO: [THẺ GIAI ĐOẠN] nội dung | chỉ số | thời gian.
@@ -114,18 +154,9 @@ try {
     $detailRows = New-Object System.Collections.Generic.List[object]
     $errorRows = New-Object System.Collections.Generic.List[object]
     foreach ($indexError in $indexErrors) { $errorRows.Add($indexError) }
-    $current = 0
-
+    # Dựng trước toàn bộ dòng tổng hợp theo đúng thứ tự danh sách; hóa đơn tải
+    # XML lỗi vẫn có dòng tổng hợp kèm dòng lỗi, nên không mất dữ liệu.
     foreach ($invoice in $allInvoices) {
-        if (Test-HddtStopRequested) {
-            Write-HddtLog WARN ('[TẢI XML] Đã yêu cầu dừng; giữ lại {0} hóa đơn đã tải.' -f $summaryRows.Count)
-            break
-        }
-        $current++
-        $label = Get-InvoiceLabel -Invoice $invoice
-        $detailBefore = $detailRows.Count
-        # Ghi dòng tổng hợp ngay khi nhận được item danh sách. Nếu XML lỗi,
-        # người dùng vẫn thấy hóa đơn và lỗi tương ứng trong workbook.
         $summary = [pscustomobject]@{
             Direction = $invoice.Direction
             Source = $invoice.Source
@@ -149,52 +180,89 @@ try {
             OriginalNote = $invoice.OriginalNote
         }
         $summaryRows.Add($summary)
-        $summaryBindings.Add([pscustomobject]@{ Summary = $summary; Invoice = $invoice })
-        $stage = 'Tải XML'
-        try {
-            Write-HddtLog DEBUG ('Bắt đầu hóa đơn {0}/{1}: {2} [{3}]' -f $current, $allInvoices.Count, $label, $invoice.Source)
-            $xmlFiles = @(Save-GdtInvoiceXml -Config $config -Invoice $invoice)
-            $firstXml = $true
-            foreach ($xmlFile in $xmlFiles) {
-                $stage = 'Parse XML'
-                $parsed = ConvertFrom-InvoiceXml -Path $xmlFile -Direction $invoice.Direction -Source $invoice.Source
-                if ($firstXml) {
-                    Merge-HddtParsedSummary -Target $summary -Parsed $parsed.Summary
-                    $firstXml = $false
-                }
-                foreach ($row in $parsed.Details) { $detailRows.Add($row) }
-            }
+        $summaryBindings.Add([pscustomobject]@{
+            Summary = $summary
+            Invoice = $invoice
+            DetailRows = (New-Object System.Collections.Generic.List[object])
+            ErrorRow = $null
+        })
+    }
 
-            if (($current % $config.ProgressEvery) -eq 0 -or $current -eq $allInvoices.Count) {
-                $percent = if ($allInvoices.Count -eq 0) { 100 } else { [Math]::Floor(($current * 100.0) / $allInvoices.Count) }
-                Write-HddtLog INFO ('[TẢI XML] [{0}/{1} | {2}%] {3} | XML {4} | +{5} dòng chi tiết' -f $current, $allInvoices.Count, $percent, $label, $xmlFiles.Count, ($detailRows.Count - $detailBefore))
+    # Chỉ tải/parse XML mới chạy song song. Mỗi hóa đơn lấy từ chỉ số dùng chung
+    # đúng một lần; kết quả trả về kèm Index nên khi gom lại vẫn giữ nguyên thứ
+    # tự danh sách (không trùng, không thiếu dòng).
+    $workerCount = [int]$config.DownloadWorkers
+    if ($workerCount -gt 1 -and $summaryBindings.Count -gt 1) {
+        Write-HddtLog INFO ('[TẢI XML] Chế độ tải: {0} luồng (tự điều tiết 1-{0} theo tải máy chủ).' -f $workerCount)
+        $gate = New-HddtSharedGate -MaxWorkers $workerCount -BaseDelayMs $config.RequestDelayMs
+        Set-HddtSharedGate $gate
+        # Lưu ý PS 5.1: @() trên List[object] chứa pscustomobject có thể lỗi
+        # "Argument types do not match", nên dùng ToArray() trực tiếp.
+        $invoiceArray = $allInvoices.ToArray()
+        $pool = Start-HddtXmlDownloadPool -Config $config -Invoices $invoiceArray -Gate $gate -Root $PSScriptRoot `
+            -LogFile (Get-HddtLogFile) -LogLevel $config.LogLevel -LogToFile ([bool]$config.LogToFile) -WorkerCount $workerCount
+        $applied = 0
+        $totalCount = $summaryBindings.Count
+        try {
+            while ($true) {
+                if (Test-HddtStopRequested) { break }
+                $anyRunning = $false
+                foreach ($worker in $pool.Workers) {
+                    if (-not $worker.Handle.IsCompleted) { $anyRunning = $true; break }
+                }
+                $item = Get-HddtXmlPoolItem -Pool $pool
+                while ($null -ne $item) {
+                    $binding = $summaryBindings[[int]$item.Index]
+                    Add-HddtInvoiceResult -Binding $binding -Result $item
+                    $applied++
+                    if (($applied % $config.ProgressEvery) -eq 0 -or $applied -eq $totalCount) {
+                        $percent = if ($totalCount -eq 0) { 100 } else { [Math]::Floor(($applied * 100.0) / $totalCount) }
+                        Write-HddtLog INFO ('[TẢI XML] [{0}/{1} | {2}%] {3} | XML {4} | +{5} dòng chi tiết' -f $applied, $totalCount, $percent, (Get-InvoiceLabel -Invoice $binding.Invoice), @($item.XmlFiles).Count, $binding.DetailRows.Count)
+                    }
+                    $item = Get-HddtXmlPoolItem -Pool $pool
+                }
+                if (-not $anyRunning -and $pool.Queue.Count -eq 0) { break }
+                Start-Sleep -Milliseconds 50
+            }
+            $item = Get-HddtXmlPoolItem -Pool $pool
+            while ($null -ne $item) {
+                $binding = $summaryBindings[[int]$item.Index]
+                Add-HddtInvoiceResult -Binding $binding -Result $item
+                $applied++
+                $item = Get-HddtXmlPoolItem -Pool $pool
+            }
+            if (Test-HddtStopRequested) {
+                Write-HddtLog WARN ('[TẢI XML] Đã yêu cầu dừng; đã xử lý {0}/{1} hóa đơn.' -f $applied, $totalCount)
             }
         }
-        catch {
+        finally {
+            Complete-HddtXmlDownloadPool -Pool $pool
+            Set-HddtSharedGate $null
+        }
+    }
+    else {
+        Write-HddtLog INFO '[TẢI XML] Chế độ tải: tuần tự.'
+        $current = 0
+        foreach ($binding in $summaryBindings) {
             if (Test-HddtStopRequested) {
-                Write-HddtLog WARN ('[TẢI XML] Dừng khi tải {0}: {1}' -f $label, $_.Exception.Message)
+                Write-HddtLog WARN ('[TẢI XML] Đã yêu cầu dừng; giữ lại {0} hóa đơn đã tải.' -f $current)
                 break
             }
-            $errorRows.Add([pscustomobject]@{
-                Direction = $invoice.Direction
-                Source = $invoice.Source
-                SellerTaxCode = $invoice.SellerTaxCode
-                InvoiceTemplate = $invoice.InvoiceTemplate
-                InvoiceSeries = $invoice.InvoiceSeries
-                InvoiceNumber = $invoice.InvoiceNumber
-                InvoiceDate = $invoice.InvoiceDate
-                Stage = $stage
-                Endpoint = Get-GdtLastRequestUri
-                StatusCode = Get-GdtLastStatusCode
-                Attempts = Get-GdtLastRequestAttempts
-                RetryAfterSeconds = Get-GdtLastRetryAfterSeconds
-                RecordedAt = [datetime]::Now
-                Error = $_.Exception.Message
-                FinalResult = 'Không tải được'
-                Note = ''
-            })
-            Write-HddtLog WARN ('[TẢI XML] Không tải được {0} ({1}/{2}): {3}' -f $label, $current, $allInvoices.Count, $_.Exception.Message)
+            $current++
+            $result = Invoke-HddtInvoiceXmlJob -Config $config -Invoice $binding.Invoice
+            Add-HddtInvoiceResult -Binding $binding -Result $result
+            if (($current % $config.ProgressEvery) -eq 0 -or $current -eq $summaryBindings.Count) {
+                $percent = if ($summaryBindings.Count -eq 0) { 100 } else { [Math]::Floor(($current * 100.0) / $summaryBindings.Count) }
+                Write-HddtLog INFO ('[TẢI XML] [{0}/{1} | {2}%] {3} | XML {4} | +{5} dòng chi tiết' -f $current, $summaryBindings.Count, $percent, (Get-InvoiceLabel -Invoice $binding.Invoice), @($result.XmlFiles).Count, $binding.DetailRows.Count)
+            }
         }
+    }
+
+    # Gom dòng chi tiết và dòng lỗi theo đúng thứ tự danh sách, bất kể luồng nào
+    # hoàn thành trước.
+    foreach ($binding in $summaryBindings) {
+        foreach ($row in $binding.DetailRows) { $detailRows.Add($row) }
+        if ($null -ne $binding.ErrorRow) { $errorRows.Add($binding.ErrorRow) }
     }
 
     # Chuỗi hóa đơn liên quan và thông tin liên quan (tương ứng
@@ -290,6 +358,7 @@ catch {
     }
     if ($loggingStarted) {
         Write-HddtLog ERROR $_.Exception.Message
+        Write-HddtLog ERROR ('Chi tiết lỗi: ' + $_.ScriptStackTrace)
         $savedLog = Get-HddtLogFile
         if (-not [string]::IsNullOrWhiteSpace($savedLog)) { Write-HddtLog ERROR ('Xem nhật ký: {0}' -f $savedLog) }
     }

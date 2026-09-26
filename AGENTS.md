@@ -40,6 +40,7 @@ Agent phải:
 | `src/Login.ps1` | CAPTCHA SVG → ký tự, đăng nhập, lấy token trong bộ nhớ |
 | `src/InvoiceApi.ps1` | Gọi API GDT: danh sách hóa đơn, tải ZIP XML, chuỗi liên quan |
 | `src/XmlParser.ps1` | Parse XML hóa đơn thành `Summary` + `Details` |
+| `src/Parallel.ps1` | Tải + parse XML đa luồng (runspace pool) và tự điều tiết số luồng theo tải GDT |
 | `src/LinkTraCuu.ps1` | Bảng tra cứu (sheet `LinkTraCuu`) và nhãn `tthai`/`ttxly` |
 | `src/ExcelExporter.ps1` | Dựng workbook `.xlsx` data-only (không thư viện ngoài) |
 | `tests/Run-Tests.ps1` | Toàn bộ kiểm thử, chạy bằng một lệnh |
