@@ -7,6 +7,7 @@ Công cụ PowerShell để tải **XML hóa đơn điện tử** từ GDT và x
 - Có thể dùng proxy/VPN khi IP hiện tại bị GDT hạn chế.
 - Xuất Excel dạng dữ liệu, không chứa VBA hoặc sheet `MENU`.
 - Có thể chạy bằng `.env` hoặc nhập cấu hình trực tiếp.
+<img width="1044" height="560" alt="image" src="https://github.com/user-attachments/assets/c0268a28-88ca-4e80-9df8-a0aa984faaa1" />
 
 ---
 
