@@ -960,8 +960,8 @@ function Test-TestEnvRejected {
 }
 try {
     $defaultNewConfig = Get-HddtConfig -EnvFile (New-TestEnvFile) -RepositoryRoot $root
-    Assert-Equal 2 $defaultNewConfig.XmlConcurrency 'XML_CONCURRENCY defaults to 2'
-    Assert-Equal 3 $defaultNewConfig.XmlMaxConcurrency 'XML_MAX_CONCURRENCY defaults to 3'
+    Assert-Equal 4 $defaultNewConfig.XmlConcurrency 'XML_CONCURRENCY defaults to 4'
+    Assert-Equal 4 $defaultNewConfig.XmlMaxConcurrency 'XML_MAX_CONCURRENCY defaults to 4'
     Assert-Equal 800 $defaultNewConfig.XmlRequestIntervalMs 'XML_REQUEST_INTERVAL_MS defaults to 800'
     Assert-Equal '' $defaultNewConfig.BrowserUserAgent 'BROWSER_USER_AGENT defaults to empty'
     Assert-Equal $false $defaultNewConfig.LogHttpProfile 'LOG_HTTP_PROFILE defaults to false'
@@ -1173,7 +1173,6 @@ try {
     # HTTP 429: cooldown theo Retry-After, giam mot ket noi, tang gian cach 1.5x.
     Set-HddtSharedValue -Key 'XmlCurrentIntervalMs' -Value 800
     Set-HddtSharedValue -Key 'XmlCurrentConcurrency' -Value 2
-    Set-HddtSharedValue -Key 'XmlSuccessStreak' -Value 7
     $script:CapturedThrottleLogs = @()
     $cooldownStart = [datetime]::UtcNow
     Register-GdtXmlRateLimit -RetryAfterSeconds 45
@@ -1181,7 +1180,8 @@ try {
     Assert-Equal 1 $snapshot.RateLimitCount 'Rate limit counted once'
     Assert-Equal 1 $snapshot.CurrentConcurrency 'Concurrency drops by one on 429'
     Assert-Equal 1200 $snapshot.CurrentIntervalMs 'Interval grows by 1.5x on 429'
-    Assert-Equal 0 $snapshot.SuccessStreak 'Success streak resets on 429'
+    $lastRateLimitUtc = [datetime](Get-HddtSharedValue -Key 'XmlLastRateLimitUtc')
+    Assert-Equal $true (($lastRateLimitUtc - $cooldownStart).TotalSeconds -ge 0 -and ($lastRateLimitUtc - $cooldownStart).TotalSeconds -le 5) '429 records the last rate-limit time for recovery'
     $cooldownUntil = [datetime](Get-HddtSharedValue -Key 'XmlGlobalCooldownUntilUtc')
     Assert-Equal $true (($cooldownUntil - $cooldownStart).TotalSeconds -ge 44) 'Cooldown follows Retry-After'
     Assert-Equal $true (($cooldownUntil - $cooldownStart).TotalSeconds -le 47) 'No jitter when Retry-After is present'
@@ -1210,33 +1210,39 @@ try {
     Register-GdtXmlRateLimit -RetryAfterSeconds 0
     Assert-Equal 1 (Get-GdtXmlThrottleSnapshot).CurrentConcurrency 'Concurrency never drops below one'
 
-    # Phuc hoi: giam gian cach truoc, moi tang lai ket noi sau do.
+    # Phuc hoi theo thoi gian: im 429 du lau thi chia doi gian cach ve muc cau
+    # hinh truoc, sau do moi tang lai ket noi. Khong doi chuoi request thanh
+    # cong lien tiep nen khong bi ket o 1 ket noi sau mot dot rate-limit.
     Set-HddtSharedValue -Key 'XmlBaseIntervalMs' -Value 800
-    Set-HddtSharedValue -Key 'XmlCurrentIntervalMs' -Value 1200
+    Set-HddtSharedValue -Key 'XmlCurrentIntervalMs' -Value 4000
     Set-HddtSharedValue -Key 'XmlCurrentConcurrency' -Value 1
-    Set-HddtSharedValue -Key 'XmlSuccessStreak' -Value 0
-    for ($streakIndex = 0; $streakIndex -lt 24; $streakIndex++) { Register-GdtXmlSuccess }
-    Assert-Equal 24 (Get-GdtXmlThrottleSnapshot).SuccessStreak 'Streak counts up to the threshold'
-    Assert-Equal 1200 (Get-GdtXmlThrottleSnapshot).CurrentIntervalMs 'No recovery before the threshold'
+    Set-HddtSharedValue -Key 'XmlLastRateLimitUtc' -Value ([datetime]::UtcNow)
+    Register-GdtXmlSuccess
+    Assert-Equal 4000 (Get-GdtXmlThrottleSnapshot).CurrentIntervalMs 'No recovery before the quiet window'
+
+    Set-HddtSharedValue -Key 'XmlLastRateLimitUtc' -Value ([datetime]::UtcNow).AddSeconds(-30)
     $script:CapturedThrottleLogs = @()
     Register-GdtXmlSuccess
     $snapshot = Get-GdtXmlThrottleSnapshot
-    Assert-Equal 0 $snapshot.SuccessStreak 'Streak resets after recovery'
-    Assert-Equal 1020 $snapshot.CurrentIntervalMs 'Interval reduced to 85 percent after 25 successes'
-    Assert-Equal 1 (@($script:CapturedThrottleLogs | Where-Object { $_ -match '25 request thành công \| interval 1200→1020 ms' })).Count 'Interval recovery logged'
+    Assert-Equal 2000 $snapshot.CurrentIntervalMs 'Interval is halved after a quiet window'
+    Assert-Equal 1 (@($script:CapturedThrottleLogs | Where-Object { $_ -match 'interval 4000→2000 ms' })).Count 'Interval recovery logged'
 
     Set-HddtSharedValue -Key 'XmlCurrentIntervalMs' -Value 800
-    Set-HddtSharedValue -Key 'XmlSuccessStreak' -Value 0
+    Set-HddtSharedValue -Key 'XmlLastRateLimitUtc' -Value ([datetime]::UtcNow).AddSeconds(-30)
     $script:CapturedThrottleLogs = @()
-    for ($streakIndex = 0; $streakIndex -lt 25; $streakIndex++) { Register-GdtXmlSuccess }
+    Register-GdtXmlSuccess
     $snapshot = Get-GdtXmlThrottleSnapshot
-    Assert-Equal 2 $snapshot.CurrentConcurrency 'Concurrency raised by one when the interval is back to base'
-    Assert-Equal 1 (@($script:CapturedThrottleLogs | Where-Object { $_ -match 'Kết nối ổn định \| concurrency 1→2' })).Count 'Concurrency recovery logged'
+    Assert-Equal 2 $snapshot.CurrentConcurrency 'Concurrency raised by one after the interval is back to base'
+    Assert-Equal 1 (@($script:CapturedThrottleLogs | Where-Object { $_ -match 'concurrency 1→2' })).Count 'Concurrency recovery logged'
 
+    # Hoi phuc hoan toan: ngung theo doi de khong kiem tra/log lap moi request.
     Set-HddtSharedValue -Key 'XmlCurrentConcurrency' -Value 3
-    Set-HddtSharedValue -Key 'XmlSuccessStreak' -Value 0
-    for ($streakIndex = 0; $streakIndex -lt 25; $streakIndex++) { Register-GdtXmlSuccess }
+    Set-HddtSharedValue -Key 'XmlLastRateLimitUtc' -Value ([datetime]::UtcNow).AddSeconds(-30)
+    $script:CapturedThrottleLogs = @()
+    Register-GdtXmlSuccess
     Assert-Equal 3 (Get-GdtXmlThrottleSnapshot).CurrentConcurrency 'Concurrency never exceeds XML_MAX_CONCURRENCY'
+    Assert-Equal ([datetime]::MinValue) (Get-HddtSharedValue -Key 'XmlLastRateLimitUtc') 'Fully recovered throttle stops tracking the last 429'
+    Assert-Equal 0 $script:CapturedThrottleLogs.Count 'No log while fully recovered'
 
     # Dung an toan: khong gui them request nao sau yeu cau dung.
     Set-HddtSharedValue -Key 'StopRequested' -Value $true
@@ -1280,9 +1286,11 @@ try {
     }
     $downloadConfig = New-TestXmlConfig
     $okInvoice = [pscustomobject]@{ Direction = 'purchase'; Source = 'query'; SellerTaxCode = '0101111111'; InvoiceTemplate = '1'; InvoiceSeries = 'C26TABC'; InvoiceNumber = '1' }
-    $okResult = Get-GdtXmlDownloadResult -Config $downloadConfig -Invoice $okInvoice -PipelineIndex 4
+    $okResult = Get-GdtXmlDownloadResult -Config $downloadConfig -Invoice $okInvoice -PipelineIndex 4 -WorkerIndex 2 -WorkerCount 3
     Assert-Equal $true $okResult.Success 'Successful download is reported as success'
     Assert-Equal 4 $okResult.PipelineIndex 'Pipeline index is preserved'
+    Assert-Equal 2 $okResult.WorkerIndex 'Result records which worker handled the invoice'
+    Assert-Equal 3 $okResult.WorkerCount 'Result records the worker pool size'
     Assert-Equal 1 @($okResult.XmlFiles).Count 'XML file list is returned'
     Assert-Equal 'purchase/C26TABC/1' $okResult.Label 'Label is built for progress logs'
     Assert-Equal '' $okResult.ErrorMessage 'Success has no error message'
@@ -1552,10 +1560,12 @@ function Request-GdtSessionToken { param($Config) return 'stub-token' }
 
     $originalPipelineLog = ${function:Write-HddtLog}
     $script:CapturedPipelineLogs = @()
-    $pipeline = Start-HddtXmlPipeline -Config $pipelineConfig -Invoices $pipelineInvoices -Root $stubRoot
+    $pipeline = $null
     $pipelineResults = New-Object System.Collections.Generic.List[object]
     try {
+        # Bat log truoc khi mo pipeline de bat ca dong thong bao so worker.
         Set-Item Function:\Write-HddtLog -Value { param($Level = 'INFO', $Message) $script:CapturedPipelineLogs += [string]$Message }
+        $pipeline = Start-HddtXmlPipeline -Config $pipelineConfig -Invoices $pipelineInvoices -Root $stubRoot
         $pipelineDeadline = [datetime]::UtcNow.AddSeconds(30)
         while (-not (Test-HddtXmlPipelineCompleted -Pipeline $pipeline) -and [datetime]::UtcNow -lt $pipelineDeadline) {
             foreach ($pipelineResult in @(Receive-HddtXmlPipeline -Pipeline $pipeline)) { $pipelineResults.Add($pipelineResult) }
@@ -1584,6 +1594,12 @@ function Request-GdtSessionToken { param($Config) return 'stub-token' }
         }
     }
     Assert-Equal $true (@($script:CapturedPipelineLogs | Where-Object { $_ -match 'Bắt đầu hóa đơn' }).Count -ge 6) 'Worker logs are forwarded to the main thread'
+    Assert-Equal $true (@($script:CapturedPipelineLogs | Where-Object { $_ -match '\[TẢI XML\] Khởi động 2 worker' }).Count -ge 1) 'Pipeline log states how many workers start'
+    Assert-Equal $true (@($script:CapturedPipelineLogs | Where-Object { $_ -match 'Worker \d+/2 bắt đầu làm việc' }).Count -ge 2) 'Every worker logs that it starts working'
+    Assert-Equal $true (@($script:CapturedPipelineLogs | Where-Object { $_ -match 'Worker \d+/2 kết thúc' }).Count -ge 2) 'Every worker logs that it finishes'
+    Assert-Equal 2 (Get-HddtSharedValue -Key 'WorkerCount') 'Shared state exposes the worker count for progress logs'
+    Assert-Equal $true (@($pipelineResults | Where-Object { $_.WorkerIndex -lt 1 -or $_.WorkerIndex -gt 2 }).Count -eq 0) 'Result worker index stays inside the worker pool'
+    Assert-Equal 2 (Complete-HddtSharedState -Config $pipelineConfig).WorkerCount 'Metrics report the worker count'
 
     # Pipeline da xong: stop khong duoc danh dau ngu dung (khong mat cac buoc sau).
     $stopResults = @(Stop-HddtXmlPipeline -Pipeline $pipeline)

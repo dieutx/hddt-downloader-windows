@@ -4,9 +4,12 @@
 # sẽ đi qua Enter/Exit-GdtXmlRequestSlot thay vì giãn cách tổng (REQUEST_DELAY_MS).
 $script:HddtXmlThrottleAvailable = $true
 
-# Ngưỡng phục hồi sau rate-limit: sau 25 request thành công liên tiếp mới giảm
-# giãn cách hoặc tăng lại số kết nối.
-$script:HddtXmlRecoveryThreshold = 25
+# Khoảng im lặng (không gặp 429) trước khi thực hiện bước phục hồi kế tiếp:
+# giảm giãn cách về mức cấu hình trước, sau đó mới tăng lại số kết nối. Phục
+# hồi theo thời gian để không phụ thuộc chuỗi request thành công liên tiếp;
+# khi GDT còn trả 429 xen kẽ, chuỗi đó gần như không bao giờ đủ dài và tải bị
+# kẹt ở 1 kết nối dù đợt rate-limit đã qua.
+$script:HddtXmlRecoveryStepSeconds = 10
 
 # Script chạy trong mỗi worker runspace: tự nạp src/*, nối vào trạng thái dùng
 # chung rồi xử lý các hóa đơn được chia vòng tròn (round-robin).
@@ -30,17 +33,21 @@ $script:HddtLogFile = $null
 
 $workerIndex = [int]$WorkerIndex
 $workerCount = [int]$WorkerCount
+$workerNumber = $workerIndex + 1
+Write-HddtLog INFO ('[TẢI XML] Worker {0}/{1} bắt đầu làm việc.' -f $workerNumber, $workerCount)
 while ($workerIndex -lt $Invoices.Count) {
     if (Test-HddtStopRequested) { break }
     $invoice = $Invoices[$workerIndex]
     try {
-        $result = Get-GdtXmlDownloadResult -Config $Config -Invoice $invoice -PipelineIndex $workerIndex
+        $result = Get-GdtXmlDownloadResult -Config $Config -Invoice $invoice -PipelineIndex $workerIndex -WorkerIndex $workerNumber -WorkerCount $workerCount
     }
     catch {
         # Get-GdtXmlDownloadResult đã bọc mọi lỗi; nhánh này chỉ phòng khi
         # chính hàm đó trục trặc để main thread vẫn nhận được một kết quả.
         $result = [pscustomobject]@{
             PipelineIndex = $workerIndex
+            WorkerIndex = $workerNumber
+            WorkerCount = $workerCount
             Invoice = $invoice
             Label = ''
             Success = $false
@@ -57,6 +64,7 @@ while ($workerIndex -lt $Invoices.Count) {
     Add-HddtXmlResult -Result $result
     $workerIndex += $workerCount
 }
+Write-HddtLog INFO ('[TẢI XML] Worker {0}/{1} kết thúc.' -f $workerNumber, $workerCount)
 '@
 
 # Khởi tạo trạng thái dùng chung cho một lần tải XML song song và nối vào
@@ -84,10 +92,12 @@ function New-HddtXmlSharedState {
         XmlCurrentConcurrency = $concurrency
         XmlBaseIntervalMs = $intervalMs
         XmlCurrentIntervalMs = $intervalMs
-        XmlSuccessStreak = 0
+        XmlLastRateLimitUtc = [datetime]::MinValue
+        XmlRecoveryStepSeconds = $script:HddtXmlRecoveryStepSeconds
         XmlRateLimitCount = 0
         XmlGlobalCooldownUntilUtc = [datetime]::MinValue
         XmlLastRequestStartUtc = [datetime]::MinValue
+        WorkerCount = 0
         XmlActiveCount = 0
         XmlPeakConcurrency = 0
         XmlCompletedCount = 0
@@ -209,7 +219,7 @@ function Register-GdtXmlRateLimit {
         $newInterval = [Math]::Min(5000, [Math]::Max([int]$shared.XmlBaseIntervalMs, [int][Math]::Floor($oldInterval * 1.5)))
         $shared.XmlCurrentIntervalMs = $newInterval
 
-        $shared.XmlSuccessStreak = 0
+        $shared.XmlLastRateLimitUtc = [datetime]::UtcNow
         $shared.XmlRateLimitCount = ([int]$shared.XmlRateLimitCount + 1)
     }
     finally { [Threading.Monitor]::Exit($shared.SyncRoot) }
@@ -217,8 +227,9 @@ function Register-GdtXmlRateLimit {
     Write-HddtLog WARN ('[XML THROTTLE] HTTP 429 | cooldown {0}s | concurrency {1}→{2} | interval {3}→{4} ms' -f $cooldownSeconds, $oldConcurrency, $newConcurrency, $oldInterval, $newInterval)
 }
 
-# Request XML thành công liên tiếp: sau ngưỡng phục hồi thì giảm giãn cách
-# trước, hết giãn cách mới tăng lại số kết nối (không lấy lại quá mức cấu hình).
+# Phục hồi sau rate-limit theo thời gian: khi đã im 429 đủ lâu, mỗi bước hồi
+# giảm giãn cách về mức cấu hình trước, rồi mới tăng lại số kết nối (không vượt
+# XML_MAX_CONCURRENCY). Bước kế tiếp chỉ xảy ra sau một khoảng im lặng nữa.
 function Register-GdtXmlSuccess {
     [CmdletBinding()]
     param()
@@ -228,25 +239,30 @@ function Register-GdtXmlSuccess {
     $logMessage = ''
     [Threading.Monitor]::Enter($shared.SyncRoot)
     try {
-        $shared.XmlSuccessStreak = ([int]$shared.XmlSuccessStreak + 1)
-        if ([int]$shared.XmlSuccessStreak -lt $script:HddtXmlRecoveryThreshold) { return }
-        $shared.XmlSuccessStreak = 0
+        $lastRateLimitUtc = [datetime]$shared.XmlLastRateLimitUtc
+        if ($lastRateLimitUtc -eq [datetime]::MinValue) { return }
+        $stepSeconds = [double]$shared.XmlRecoveryStepSeconds
+        if (([datetime]::UtcNow - $lastRateLimitUtc).TotalSeconds -lt $stepSeconds) { return }
 
         $interval = [int]$shared.XmlCurrentIntervalMs
         $baseInterval = [int]$shared.XmlBaseIntervalMs
         $concurrency = [int]$shared.XmlCurrentConcurrency
         $maxConcurrency = [int]$shared.XmlMaxConcurrency
         if ($interval -gt $baseInterval) {
-            $newInterval = [Math]::Max($baseInterval, [int][Math]::Floor($interval * 0.85))
-            if ($newInterval -lt $interval) {
-                $shared.XmlCurrentIntervalMs = $newInterval
-                $logMessage = ('25 request thành công | interval {0}→{1} ms' -f $interval, $newInterval)
-            }
+            $newInterval = [Math]::Max($baseInterval, [int][Math]::Floor($interval / 2))
+            $shared.XmlCurrentIntervalMs = $newInterval
+            $logMessage = ('Kết nối ổn định {0}s | interval {1}→{2} ms' -f [int]$stepSeconds, $interval, $newInterval)
         }
         elseif ($concurrency -lt $maxConcurrency) {
             $shared.XmlCurrentConcurrency = ($concurrency + 1)
-            $logMessage = ('Kết nối ổn định | concurrency {0}→{1}' -f $concurrency, ($concurrency + 1))
+            $logMessage = ('Kết nối ổn định {0}s | concurrency {1}→{2}' -f [int]$stepSeconds, $concurrency, ($concurrency + 1))
         }
+        else {
+            # Hồi phục hoàn toàn: ngừng theo dõi để không kiểm tra lại vô ích.
+            $shared.XmlLastRateLimitUtc = [datetime]::MinValue
+            return
+        }
+        $shared.XmlLastRateLimitUtc = [datetime]::UtcNow
     }
     finally { [Threading.Monitor]::Exit($shared.SyncRoot) }
 
@@ -265,12 +281,13 @@ function Get-GdtXmlThrottleSnapshot {
         CurrentConcurrency = [int]$shared.XmlCurrentConcurrency
         BaseIntervalMs = [int]$shared.XmlBaseIntervalMs
         CurrentIntervalMs = [int]$shared.XmlCurrentIntervalMs
+        WorkerCount = [int]$shared.WorkerCount
         ActiveCount = [int]$shared.XmlActiveCount
         PeakConcurrency = [int]$shared.XmlPeakConcurrency
         CompletedCount = [int]$shared.XmlCompletedCount
         TotalResponseTimeMs = [int]$shared.XmlTotalResponseTimeMs
         RateLimitCount = [int]$shared.XmlRateLimitCount
-        SuccessStreak = [int]$shared.XmlSuccessStreak
+        LastRateLimitUtc = [datetime]$shared.XmlLastRateLimitUtc
         AuthRefreshCount = [int]$shared.AuthRefreshCount
     }
 }
@@ -326,17 +343,21 @@ function Get-GdtXmlDownloadResult {
     param(
         [Parameter(Mandatory = $true)]$Config,
         [Parameter(Mandatory = $true)]$Invoice,
-        [Parameter(Mandatory = $true)][int]$PipelineIndex
+        [Parameter(Mandatory = $true)][int]$PipelineIndex,
+        [int]$WorkerIndex = 1,
+        [int]$WorkerCount = 1
     )
 
     $label = Get-InvoiceLabel -Invoice $Invoice
     $watch = [Diagnostics.Stopwatch]::StartNew()
     try {
-        Write-HddtLog DEBUG ('Bắt đầu hóa đơn {0}: {1} [{2}]' -f ($PipelineIndex + 1), $label, $Invoice.Source)
+        Write-HddtLog DEBUG ('Worker {0}/{1} bắt đầu hóa đơn {2}: {3} [{4}]' -f $WorkerIndex, $WorkerCount, ($PipelineIndex + 1), $label, $Invoice.Source)
         $xmlFiles = @(Save-GdtInvoiceXml -Config $Config -Invoice $Invoice)
         $watch.Stop()
         return [pscustomobject]@{
             PipelineIndex = $PipelineIndex
+            WorkerIndex = $WorkerIndex
+            WorkerCount = $WorkerCount
             Invoice = $Invoice
             Label = $label
             Success = $true
@@ -354,6 +375,8 @@ function Get-GdtXmlDownloadResult {
         $watch.Stop()
         return [pscustomobject]@{
             PipelineIndex = $PipelineIndex
+            WorkerIndex = $WorkerIndex
+            WorkerCount = $WorkerCount
             Invoice = $Invoice
             Label = $label
             Success = $false
@@ -386,6 +409,10 @@ function Start-HddtXmlPipeline {
     $workerCount = 0
     if ($Invoices.Count -gt 0) {
         $workerCount = [Math]::Min([int]$shared.XmlMaxConcurrency, $Invoices.Count)
+        # Ghi số worker thật sự được mở vào trạng thái chung để log tiến độ ở
+        # luồng chính hiển thị được tỉ lệ worker đang chạy/tổng số worker.
+        Set-HddtSharedValue -Key 'WorkerCount' -Value $workerCount
+        Write-HddtLog INFO ('[TẢI XML] Khởi động {0} worker cho {1} hóa đơn (tối đa {2} kết nối).' -f $workerCount, $Invoices.Count, [int]$shared.XmlMaxConcurrency)
         $logLevel = [string](Get-HddtConfigValue $Config 'LogLevel' 'info')
         try {
             for ($workerIndex = 0; $workerIndex -lt $workerCount; $workerIndex++) {
@@ -508,13 +535,16 @@ function Complete-HddtSharedState {
     $completedCount = 0
     $rateLimitCount = 0
     $authRefreshCount = 0
+    $workerCount = 0
     if ($null -ne $snapshot) {
         $peakConcurrency = $snapshot.PeakConcurrency
         $completedCount = $snapshot.CompletedCount
         $rateLimitCount = $snapshot.RateLimitCount
         $authRefreshCount = $snapshot.AuthRefreshCount
+        $workerCount = $snapshot.WorkerCount
     }
     return [pscustomobject]@{
+        WorkerCount = $workerCount
         PeakConcurrency = $peakConcurrency
         CompletedCount = $completedCount
         RateLimitCount = $rateLimitCount
