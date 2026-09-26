@@ -259,12 +259,14 @@ function Get-HddtConfig {
     $xmlConcurrency = [int](Get-EnvValue $values 'XML_CONCURRENCY' '4')
     $xmlMaxConcurrency = [int](Get-EnvValue $values 'XML_MAX_CONCURRENCY' '4')
     $xmlRequestIntervalMs = [int](Get-EnvValue $values 'XML_REQUEST_INTERVAL_MS' '800')
+    $xmlRecoveryStepSeconds = [int](Get-EnvValue $values 'XML_RECOVERY_STEP_SECONDS' '10')
     $browserUserAgent = (Get-EnvValue $values 'BROWSER_USER_AGENT' '').Trim()
     $logHttpProfile = ConvertTo-EnvBoolean 'LOG_HTTP_PROFILE' (Get-EnvValue $values 'LOG_HTTP_PROFILE' 'false')
     if ($xmlConcurrency -lt 1 -or $xmlConcurrency -gt 10) { throw 'XML_CONCURRENCY phải nằm trong khoảng 1-10.' }
     if ($xmlMaxConcurrency -lt 1 -or $xmlMaxConcurrency -gt 10) { throw 'XML_MAX_CONCURRENCY phải nằm trong khoảng 1-10.' }
     if ($xmlConcurrency -gt $xmlMaxConcurrency) { throw 'XML_CONCURRENCY không được lớn hơn XML_MAX_CONCURRENCY.' }
     if ($xmlRequestIntervalMs -lt 0 -or $xmlRequestIntervalMs -gt 60000) { throw 'XML_REQUEST_INTERVAL_MS phải nằm trong khoảng 0-60000.' }
+    if ($xmlRecoveryStepSeconds -lt 1 -or $xmlRecoveryStepSeconds -gt 3600) { throw 'XML_RECOVERY_STEP_SECONDS phải nằm trong khoảng 1-3600.' }
 
     $includeRegular = ConvertTo-EnvBoolean 'INCLUDE_REGULAR' (Get-EnvValue $values 'INCLUDE_REGULAR' 'true')
     $includeSco = ConvertTo-EnvBoolean 'INCLUDE_SCO' (Get-EnvValue $values 'INCLUDE_SCO' 'true')
@@ -340,6 +342,7 @@ function Get-HddtConfig {
         XmlConcurrency = $xmlConcurrency
         XmlMaxConcurrency = $xmlMaxConcurrency
         XmlRequestIntervalMs = $xmlRequestIntervalMs
+        XmlRecoveryStepSeconds = $xmlRecoveryStepSeconds
         BrowserUserAgent = $browserUserAgent
         LogHttpProfile = $logHttpProfile
         IncludeRegular = $includeRegular
