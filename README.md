@@ -28,8 +28,8 @@ Mở `.env` và sửa các dòng cần thiết:
 ```dotenv
 GDT_USERNAME=0123456789
 GDT_PASSWORD=mat_khau
-FROM_DATE=01/09/2026
-TO_DATE=30/09/2026
+FROM_DATE=31/12/2025
+TO_DATE=01/01/2026
 INVOICE_DIRECTION=both
 ```
 
@@ -239,20 +239,22 @@ Trên Linux/macOS dùng `pwsh -NoProfile -File Parse-LocalXml.ps1` (hoặc `pwsh
 | `REQUEST_DELAY_MS` | Nghỉ giữa các request |
 | `MAX_RETRIES` | Số lần thử lại lỗi mạng/5xx |
 | `HTTP_TIMEOUT_SECONDS` | Thời gian chờ một request |
-| `XML_CONCURRENCY` | Số kết nối tải XML chạy song song (1-10, mặc định 2) |
-| `XML_MAX_CONCURRENCY` | Trần kết nối sau khi phục hồi từ HTTP 429 |
+| `XML_CONCURRENCY` | Số kết nối tải XML chạy song song (1-10, mặc định 4) |
+| `XML_MAX_CONCURRENCY` | Trần kết nối và số worker tải XML (mặc định 4) |
 | `XML_REQUEST_INTERVAL_MS` | Giãn cách giữa hai request XML (mặc định 800 ms) |
 | `BROWSER_USER_AGENT` | User-Agent gửi kèm; để trống dùng mặc định của trình duyệt |
 | `LOG_HTTP_PROFILE` | In log nhóm header an toàn của request để chẩn đoán |
 
 Xem toàn bộ tuỳ chọn trong `.env.example`.
 
-Tải XML chạy theo pipeline: `XML_CONCURRENCY` request cùng lúc, mỗi request chờ
-`XML_REQUEST_INTERVAL_MS`. Bị HTTP 429 thì hệ thống nghỉ theo `Retry-After`,
-giảm một kết nối và tăng khoảng cách; sau 25 request thành công liên tiếp thì
-giảm khoảng cách, rồi tăng lại kết nối, không bao giờ vượt
-`XML_MAX_CONCURRENCY`. Chạy với `XML_CONCURRENCY=1` để giữ hành vi tuần tự
-cũ.
+Tải XML chạy theo pipeline: `XML_MAX_CONCURRENCY` worker cùng lúc, mỗi request
+chờ `XML_REQUEST_INTERVAL_MS`. Log ghi rõ số worker được mở và mỗi worker đang
+xử lý hóa đơn nào (dòng `[TẢI XML] ... Worker x/y | đang chạy z/y`). Bị HTTP
+429 thì hệ thống nghỉ theo `Retry-After`, giảm một kết nối và tăng khoảng
+cách; khi đã im 429 đủ lâu (mặc định 10s mỗi bước), khoảng cách được giảm một
+nửa về mức `XML_REQUEST_INTERVAL_MS` rồi mới tăng lại kết nối, không bao giờ
+vượt `XML_MAX_CONCURRENCY`. Chạy với `XML_CONCURRENCY=1` để giữ hành vi tuần
+tự cũ.
 
 ---
 

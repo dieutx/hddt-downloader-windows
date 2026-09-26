@@ -256,8 +256,8 @@ function Get-HddtConfig {
     # Tải XML song song có kiểm soát: XML_CONCURRENCY là số kết nối khởi đầu,
     # XML_MAX_CONCURRENCY là trần để cơ chế tự phục hồi tăng dần sau rate-limit,
     # XML_REQUEST_INTERVAL_MS là giãn cách giữa hai request XML liên tiếp.
-    $xmlConcurrency = [int](Get-EnvValue $values 'XML_CONCURRENCY' '2')
-    $xmlMaxConcurrency = [int](Get-EnvValue $values 'XML_MAX_CONCURRENCY' '3')
+    $xmlConcurrency = [int](Get-EnvValue $values 'XML_CONCURRENCY' '4')
+    $xmlMaxConcurrency = [int](Get-EnvValue $values 'XML_MAX_CONCURRENCY' '4')
     $xmlRequestIntervalMs = [int](Get-EnvValue $values 'XML_REQUEST_INTERVAL_MS' '800')
     $browserUserAgent = (Get-EnvValue $values 'BROWSER_USER_AGENT' '').Trim()
     $logHttpProfile = ConvertTo-EnvBoolean 'LOG_HTTP_PROFILE' (Get-EnvValue $values 'LOG_HTTP_PROFILE' 'false')

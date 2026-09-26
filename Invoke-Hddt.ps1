@@ -146,7 +146,16 @@ function Add-HddtXmlPipelineResult {
     $total = $script:HddtXmlInvoiceCount
     if ($total -gt 0 -and (($processed % $ProgressEvery) -eq 0 -or $processed -eq $total)) {
         $percent = [Math]::Floor(($processed * 100.0) / $total)
-        Write-HddtLog INFO ('[TẢI XML] [{0}/{1} | {2}%] {3} | XML {4} | +{5} dòng chi tiết' -f $processed, $total, $percent, $Result.Label, @($Result.XmlFiles).Count, $detailAdded)
+        # Hiển thị worker nào vừa xử lý và còn bao nhiêu worker đang chạy để
+        # theo dõi mức song song thực tế, không chỉ tiến độ hóa đơn.
+        $resultWorker = 0
+        $workerProperty = $Result.PSObject.Properties['WorkerIndex']
+        if ($null -ne $workerProperty) { $resultWorker = [int]$workerProperty.Value }
+        $workerTotal = [int](Get-HddtSharedValue -Key 'WorkerCount' -Default 0)
+        $activeWorkers = 0
+        $snapshot = Get-GdtXmlThrottleSnapshot
+        if ($null -ne $snapshot) { $activeWorkers = [int]$snapshot.ActiveCount }
+        Write-HddtLog INFO ('[TẢI XML] [{0}/{1} | {2}%] Worker {3}/{4} | đang chạy {5}/{4} | {6} | XML {7} | +{8} dòng chi tiết' -f $processed, $total, $percent, $resultWorker, $workerTotal, $activeWorkers, $Result.Label, @($Result.XmlFiles).Count, $detailAdded)
     }
 }
 
@@ -310,7 +319,7 @@ try {
     if ($null -ne $sharedState) {
         $metrics = Complete-HddtSharedState -Config $config
         if ($null -ne $metrics) {
-            Write-HddtLog INFO ('[TẢI XML] Thống kê: {0} request thành công | kết nối cao nhất {1} | rate-limit {2} | trung bình {3} ms/request | làm mới token {4} | chạy {5}.' -f $metrics.CompletedCount, $metrics.PeakConcurrency, $metrics.RateLimitCount, $metrics.AverageResponseTimeMs, $metrics.AuthRefreshCount, (Get-HddtElapsedText))
+            Write-HddtLog INFO ('[TẢI XML] Thống kê: worker {0} | {1} request thành công | kết nối cao nhất {2} | rate-limit {3} | trung bình {4} ms/request | làm mới token {5} | chạy {6}.' -f $metrics.WorkerCount, $metrics.CompletedCount, $metrics.PeakConcurrency, $metrics.RateLimitCount, $metrics.AverageResponseTimeMs, $metrics.AuthRefreshCount, (Get-HddtElapsedText))
         }
     }
 

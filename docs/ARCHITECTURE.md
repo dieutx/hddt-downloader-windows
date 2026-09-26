@@ -69,17 +69,23 @@ xuất ra sheet `BaoCao_LoiTaiHD`.
 `XmlScheduler.ps1`: mỗi worker là một runspace chạy `Get-GdtXmlDownloadResult`
 theo vòng round-robin, trả kết quả kèm `PipelineIndex` để entry point ghi lại
 theo đúng thứ tự hóa đơn. Worker chỉ đẩy log vào hàng đợi chung, luồng chính
-là nơi ghi ra console/file.
+là nơi ghi ra console/file. Mỗi dòng kết quả mang `WorkerIndex`/`WorkerCount`
+nên log tiến độ hiển thị được worker nào vừa xử lý và còn bao nhiêu worker
+đang chạy; `Start-HddtXmlPipeline` ghi số worker thật sự được mở và mỗi worker
+thông báo lúc bắt đầu/kết thúc làm việc.
 
 Điều tiết dùng chung trong một `hashtable` đồng bộ:
 
 - `Enter-GdtXmlRequestSlot` giữ đúng `XML_CONCURRENCY` kết nối và giãn cách
   `XML_REQUEST_INTERVAL_MS` giữa hai request;
 - HTTP 429 gọi `Register-GdtXmlRateLimit`: nghỉ theo `Retry-After` (không có
-  thì dùng `COOLDOWN_FALLBACK_SECONDS`, mặc định 15s), giảm một kết nối và
-  tăng khoảng cách 1.5 lần;
-- sau 25 request thành công liên tiếp, `Register-GdtXmlSuccess` giảm khoảng
-  cách về 85%, rồi tăng lại kết nối, không vượt `XML_MAX_CONCURRENCY`;
+  thì dùng `COOLDOWN_FALLBACK_SECONDS`, mặc định 15s), giảm một kết nối, tăng
+  khoảng cách 1.5 lần và ghi lại thời điểm 429 gần nhất;
+- `Register-GdtXmlSuccess` phục hồi theo thời gian: khi đã im 429 đủ lâu
+  (`XML_RECOVERY_STEP_SECONDS`, mặc định 10s mỗi bước), giảm một nửa khoảng
+  cách về mức cấu hình trước, rồi tăng lại kết nối, không vượt
+  `XML_MAX_CONCURRENCY`. Phục hồi theo thời gian nên không bị kẹt ở một kết
+  nối khi 429 còn xen kẽ và chuỗi request thành công liên tiếp không đủ dài;
 - cờ `StopRequested` trong trạng thái chung để Ctrl+C dừng mọi worker sau
   request hiện tại.
 
