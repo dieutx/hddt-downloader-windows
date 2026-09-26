@@ -195,7 +195,11 @@ function Register-GdtXmlRateLimit {
             # không chờ (dùng cho kiểm thử và cấu hình không muốn chặn).
             if ($fallback -gt 0) { $cooldownSeconds = [Math]::Max(0, $fallback + (Get-Random -Minimum -2 -Maximum 3)) }
         }
-        $shared.XmlGlobalCooldownUntilUtc = ([datetime]::UtcNow).AddSeconds($cooldownSeconds)
+        $proposedCooldownUntilUtc = ([datetime]::UtcNow).AddSeconds($cooldownSeconds)
+        $existingCooldownUntilUtc = [datetime]$shared.XmlGlobalCooldownUntilUtc
+        if ($proposedCooldownUntilUtc -gt $existingCooldownUntilUtc) {
+            $shared.XmlGlobalCooldownUntilUtc = $proposedCooldownUntilUtc
+        }
 
         $oldConcurrency = [int]$shared.XmlCurrentConcurrency
         $newConcurrency = [Math]::Max(1, $oldConcurrency - 1)

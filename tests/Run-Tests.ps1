@@ -1188,6 +1188,15 @@ try {
     Assert-Equal $false (Enter-GdtXmlRequestSlot -Config $throttleConfig -TryOnly) 'Slot refused during cooldown'
     Assert-Equal 1 (@($script:CapturedThrottleLogs | Where-Object { $_ -match '\[XML THROTTLE\] HTTP 429 \| cooldown 45s \| concurrency 2→1 \| interval 800→1200 ms' })).Count 'Throttle log reports cooldown, concurrency and interval'
 
+    # Hai worker nhan 429 gan nhau: phan hoi co Retry-After ngan hon khong
+    # duoc rut ngan cooldown dai hon da duoc ghi truoc do.
+    Register-GdtXmlRateLimit -RetryAfterSeconds 120
+    $longCooldownUntil = [datetime](Get-HddtSharedValue -Key 'XmlGlobalCooldownUntilUtc')
+    Register-GdtXmlRateLimit -RetryAfterSeconds 30
+    $mergedCooldownUntil = [datetime](Get-HddtSharedValue -Key 'XmlGlobalCooldownUntilUtc')
+    Assert-Equal $true ($mergedCooldownUntil -ge $longCooldownUntil) 'Concurrent 429 cooldown keeps the latest expiry'
+    Assert-Equal $false (Enter-GdtXmlRequestSlot -Config $throttleConfig -TryOnly) 'Longer cooldown remains enforced after a shorter Retry-After'
+
     # Khong co Retry-After va fallback = 0: khong cho phep cho, van giam ket noi.
     Set-HddtSharedValue -Key 'CooldownFallbackSeconds' -Value 0
     Set-HddtSharedValue -Key 'XmlCurrentIntervalMs' -Value 0
