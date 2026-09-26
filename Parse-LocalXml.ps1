@@ -53,12 +53,24 @@ try {
     if ($progressEvery -lt 1 -or $progressEvery -gt 1000) { throw 'PROGRESS_EVERY phải nằm trong khoảng 1-1000.' }
     if ($logLevel -notin @('debug','info','warn','error')) { throw 'LOG_LEVEL không hợp lệ.' }
 
+    $lookupTableXlsx = ''
+    $lookupTableValue = (Get-EnvValue -Values $values -Name 'LOOKUP_TABLE_XLSX' -Default '').Trim()
+    if (-not [string]::IsNullOrWhiteSpace($lookupTableValue)) {
+        if ([IO.Path]::GetExtension($lookupTableValue).ToLowerInvariant() -ne '.xlsx') {
+            throw 'LOOKUP_TABLE_XLSX phải là file .xlsx có sheet LinkTraCuu.'
+        }
+        $lookupTableXlsx = Resolve-RepositoryPath -RepositoryRoot $PSScriptRoot -Value $lookupTableValue
+    }
+
     New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
     $logFile = Start-HddtLogging -Directory (Join-Path $outputDirectory 'logs') -Level $logLevel -ToFile $logToFile -RunName 'parse-local'
     $loggingStarted = $true
     Write-HddtLog INFO ('[PARSE XML] Bắt đầu: {0}' -f $sourceDirectory)
     $directionText = if ($direction -eq 'auto') { 'tự nhận diện theo thư mục/tên file' } else { $direction }
     Write-HddtLog INFO ('[PARSE XML] Loại: {0} | đầu ra: {1}' -f $directionText, $outputWorkbook)
+    if (-not [string]::IsNullOrWhiteSpace($lookupTableXlsx)) {
+        Write-HddtLog INFO ('[PARSE XML] Bảng tra cứu: {0}' -f $lookupTableXlsx)
+    }
     if ($logToFile) { Write-HddtLog INFO ('[PARSE XML] Nhật ký: {0}' -f $logFile) }
 
     $xmlFiles = @(Get-ChildItem -LiteralPath $sourceDirectory -Recurse -File -Filter '*.xml' | Sort-Object FullName)
@@ -108,7 +120,8 @@ try {
     }
 
     Write-HddtLog INFO ('[XUẤT FILE] Tạo workbook: tổng hợp {0} | chi tiết {1} | lỗi {2}.' -f $summaryRows.Count, $detailRows.Count, $errorRows.Count)
-    Export-InvoiceWorkbook -Path $outputWorkbook -SummaryRows ($summaryRows.ToArray()) -DetailRows ($detailRows.ToArray()) -ErrorRows ($errorRows.ToArray()) -Overwrite:$overwrite
+    $export = Export-InvoiceWorkbook -Path $outputWorkbook -SummaryRows ($summaryRows.ToArray()) -DetailRows ($detailRows.ToArray()) -ErrorRows ($errorRows.ToArray()) -Overwrite:$overwrite -LookupTablePath $lookupTableXlsx
+    Write-HddtLog INFO ('[XUẤT FILE] Link tra cứu: {0}/{1} hóa đơn có link | bảng LinkTraCuu {2} dòng.' -f $export.LinksResolved, $export.SummaryRows, $export.LookupSheetRows)
     $stopwatch.Stop()
     Write-HddtLog INFO ('[KẾT QUẢ] Hoàn tất | chạy {0:hh\:mm\:ss} | file: {1}' -f $stopwatch.Elapsed, $outputWorkbook)
     Write-HddtLog INFO ('[KẾT QUẢ] XML {0} | tổng hợp {1} | chi tiết {2} | lỗi {3}.' -f $xmlFiles.Count, $summaryRows.Count, $detailRows.Count, $errorRows.Count)

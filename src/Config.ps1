@@ -253,6 +253,17 @@ function Get-HddtConfig {
         throw 'OUTPUT_XLSX phải có phần mở rộng .xlsx.'
     }
 
+    # Workbook .xlsx có sheet 'LinkTraCuu' để người dùng tự thêm/sửa link tra
+    # cứu; file này được nạp khi xuất Excel.  Bỏ trống thì dùng bảng gốc.
+    $lookupTableXlsx = ''
+    $lookupTableValue = (Get-EnvValue $values 'LOOKUP_TABLE_XLSX' '').Trim()
+    if (-not [string]::IsNullOrWhiteSpace($lookupTableValue)) {
+        if ([System.IO.Path]::GetExtension($lookupTableValue).ToLowerInvariant() -ne '.xlsx') {
+            throw 'LOOKUP_TABLE_XLSX phải là file .xlsx có sheet LinkTraCuu.'
+        }
+        $lookupTableXlsx = Resolve-RepositoryPath $RepositoryRoot $lookupTableValue
+    }
+
     $proxyUrl = (Get-EnvValue $values 'PROXY_URL' '').Trim()
     $proxyUsername = Get-EnvValue $values 'PROXY_USERNAME' ''
     $proxyPassword = Get-EnvValue $values 'PROXY_PASSWORD' ''
@@ -309,6 +320,7 @@ function Get-HddtConfig {
         OverwriteOutput = ConvertTo-EnvBoolean 'OVERWRITE_OUTPUT' (Get-EnvValue $values 'OVERWRITE_OUTPUT' 'false')
         OutputDirectory = $outputDirectory
         OutputWorkbook = Join-Path $outputDirectory $outputName
+        LookupTableXlsx = $lookupTableXlsx
         XmlDirectory = Join-Path $outputDirectory 'xml'
         LogDirectory = Join-Path $outputDirectory 'logs'
     }

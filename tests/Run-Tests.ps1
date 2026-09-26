@@ -270,29 +270,40 @@ try {
         StatusCode = 504; Attempts = 2; RetryAfterSeconds = 0
         Error = 'Authorization: Bearer super-secret-token'; FinalResult = 'Không tải được'; Note = 'partial'
     }
-    Export-InvoiceWorkbook -Path $tempXlsx -SummaryRows @($fixtureSummary) -DetailRows @($parsed.Details) -ErrorRows @($testError) -Overwrite
+    $exportSummary = Export-InvoiceWorkbook -Path $tempXlsx -SummaryRows @($fixtureSummary) -DetailRows @($parsed.Details) -ErrorRows @($testError) -Overwrite
+    Assert-Equal 1 $exportSummary.SummaryRows 'Export summary counts summary rows'
+    Assert-Equal 1 $exportSummary.LinksResolved 'Export summary counts resolved lookup links'
+    Assert-Equal 0 $exportSummary.LinksMissing 'Export summary counts missing lookup links'
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [IO.Compression.ZipFile]::OpenRead($tempXlsx)
     try {
         Assert-Equal 1 @($zip.Entries | Where-Object FullName -eq 'xl/workbook.xml').Count 'Workbook package entry'
-        Assert-Equal 7 @($zip.Entries | Where-Object FullName -like 'xl/worksheets/sheet*.xml').Count 'Worksheet package count'
+        Assert-Equal 1 @($zip.Entries | Where-Object FullName -eq 'xl/styles.xml').Count 'Styles package entry'
+        # Excel không mở được workbook khi thiếu '_rels/.rels' (part quan hệ gốc).
+        Assert-Equal 1 @($zip.Entries | Where-Object FullName -eq '_rels/.rels').Count 'Root relationship package entry'
+        Assert-Equal 0 @($zip.Entries | Where-Object { $_.FullName -match '\\' }).Count 'No package entry keeps a path separator'
+        $rootRelationships = Read-TestZipEntryText $zip '_rels/.rels'
+        Assert-Equal $true ($rootRelationships -match 'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument"') 'Root relationship type'
+        Assert-Equal $true ($rootRelationships -match 'Target="xl/workbook.xml"') 'Root relationship points at the workbook part'
+        Assert-Equal 8 @($zip.Entries | Where-Object FullName -like 'xl/worksheets/sheet*.xml').Count 'Worksheet package count'
         Assert-Equal 0 @($zip.Entries | Where-Object FullName -like 'xl/tables/table*.xml').Count 'Data-only workbook has no table parts'
-        Assert-Equal 0 @($zip.Entries | Where-Object FullName -match 'vbaProject|MENU|Thamkhao|LinkTraCuu').Count 'No VBA or reference sheets are packaged'
+        Assert-Equal 0 @($zip.Entries | Where-Object FullName -match 'vbaProject|MENU|Thamkhao').Count 'No VBA or menu sheets are packaged'
 
         [xml]$workbookDocument = Read-TestZipEntryText $zip 'xl/workbook.xml'
         $workbookManager = New-Object Xml.XmlNamespaceManager($workbookDocument.NameTable)
         $workbookManager.AddNamespace('x', $script:SpreadsheetNamespace)
         $sheetNodes = @($workbookDocument.SelectNodes('/x:workbook/x:sheets/x:sheet', $workbookManager))
-        $expectedSheetNames = @('TongHopHD_Mua', 'ChiTietHD_Mua', 'ChiTietHD_Mua_XML', 'TongHopHD_Ban', 'ChiTietHD_Ban', 'ChiTietHD_Ban_XML', 'BaoCao_LoiTaiHD')
+        $expectedSheetNames = @('TongHopHD_Mua', 'ChiTietHD_Mua', 'ChiTietHD_Mua_XML', 'TongHopHD_Ban', 'ChiTietHD_Ban', 'ChiTietHD_Ban_XML', 'BaoCao_LoiTaiHD', 'LinkTraCuu')
         Assert-Equal ($expectedSheetNames -join '|') (($sheetNodes | ForEach-Object { $_.GetAttribute('name') }) -join '|') 'Source-style sheet order and names'
         Assert-Equal $script:SourceSummaryHeaders.Count $script:SourceSummaryWidths.Count 'Summary headers and widths have equal lengths'
         Assert-Equal $script:SourceDetailHeaders.Count $script:SourceDetailWidths.Count 'Detail headers and widths have equal lengths'
         Assert-Equal $script:SourceXmlHeadersPurchase.Count $script:SourceXmlWidths.Count 'XML headers and widths have equal lengths'
         Assert-Equal $script:SourceXmlHeadersSold.Count $script:SourceXmlWidths.Count 'Sold XML headers and widths have equal lengths'
+        Assert-Equal $script:SourceLookupHeaders.Count $script:SourceLookupWidths.Count 'Lookup sheet headers and widths have equal lengths'
         Assert-Equal 'Công đoạn lỗi' $script:SourceErrorHeaders[9] 'Error report uses source stage header'
 
         $sheetDocuments = @{}
-        for ($sheetNumber = 1; $sheetNumber -le 7; $sheetNumber++) {
+        for ($sheetNumber = 1; $sheetNumber -le 8; $sheetNumber++) {
             [xml]$sheetDocument = Read-TestZipEntryText $zip ("xl/worksheets/sheet{0}.xml" -f $sheetNumber)
             $sheetDocuments[$sheetNumber] = $sheetDocument
             $manager = New-Object Xml.XmlNamespaceManager($sheetDocument.NameTable)
@@ -328,6 +339,22 @@ try {
         Assert-Equal $true ($errorText -match '\[REDACTED\]') 'Authorization secrets are redacted from the error sheet'
         Assert-Equal $false ($errorText -match 'super-secret-token') 'Authorization token is absent from the error sheet'
 
+        # Sheet LinkTraCuu phải có trong workbook và giữ nguyên bảng định tuyến
+        # của TaiHoaDonDienTu: cột B (MST) + cột D (link) sinh ra link tra cứu.
+        $lookupSheet = $sheetDocuments[8]
+        Assert-Equal 'Tên tổ chức' (Get-TestCellValue $lookupSheet 'A1') 'Lookup sheet organization header'
+        Assert-Equal 'MST' (Get-TestCellValue $lookupSheet 'B1') 'Lookup sheet provider MST header'
+        Assert-Equal 'Link tra cứu' (Get-TestCellValue $lookupSheet 'D1') 'Lookup sheet link header'
+        Assert-Equal 'Tên trường mã tra cứu' (Get-TestCellValue $lookupSheet 'E1') 'Lookup sheet lookup field header'
+        $lookupManager = New-Object Xml.XmlNamespaceManager($lookupSheet.NameTable)
+        $lookupManager.AddNamespace('x', $script:SpreadsheetNamespace)
+        $lookupRowCount = @($lookupSheet.SelectNodes('/x:worksheet/x:sheetData/x:row', $lookupManager)).Count
+        Assert-Equal (1 + @(Get-TaiHoaDonDienTuLookupSheetRows).Count) $lookupRowCount 'Lookup sheet keeps every reference row'
+        $lookupSheetText = $lookupSheet.OuterXml
+        Assert-Equal $true ($lookupSheetText -match '0100109106') 'Lookup sheet keeps provider MSTs'
+        Assert-Equal $true ($lookupSheetText -match 'https://tracuuhoadon.vetc.com.vn/') 'Lookup sheet keeps provider links'
+        Assert-Equal 1 @($zip.Entries | Where-Object FullName -eq 'xl/worksheets/_rels/sheet8.xml.rels').Count 'Lookup sheet hyperlink relationship part'
+
         $stylesDocument = [xml](Read-TestZipEntryText $zip 'xl/styles.xml')
         $stylesManager = New-Object Xml.XmlNamespaceManager($stylesDocument.NameTable)
         $stylesManager.AddNamespace('x', $script:SpreadsheetNamespace)
@@ -339,6 +366,85 @@ try {
 }
 finally {
     Remove-Item -LiteralPath $tempXlsx -Force -ErrorAction SilentlyContinue
+}
+
+# --- Bang tra cuu: link sinh ra tu sheet LinkTraCuu ---
+Assert-Equal 'https://tracuuhoadon.vetc.com.vn/' (Get-TaiHoaDonDienTuLookupLink '0100109106') 'Provider link from the lookup table'
+Assert-Equal '' (Get-TaiHoaDonDienTuLookupLink '0999999999') 'Unknown provider has no link'
+Assert-Equal 'https://giaothongso.com.vn/tra-cuu-hoa-don-mtc/' (Get-TaiHoaDonDienTuSellerLookupLink '0109266456') 'Seller specific link from column C'
+Assert-Equal 'https://gsm-einvoice.hilo.com.vn/' (Get-TaiHoaDonDienTuLookupLink '0110269067') 'Hilo provider link'
+Assert-Equal $true (Test-TaiHoaDonDienTuLookupField 'MaTraCuu') 'Lookup field name matches'
+Assert-Equal $true (Test-TaiHoaDonDienTuLookupField 'Hilo-SearchKey') 'Hilo lookup field name matches'
+Assert-Equal $false (Test-TaiHoaDonDienTuLookupField 'KhongPhaiTenTruong') 'Unknown lookup field name is rejected'
+Assert-Equal 'Tất cả' (Get-ExcelStatusLabel 0) 'Status label for 0'
+Assert-Equal 'Hóa đơn mới' (Get-ExcelStatusLabel 1) 'Status label for 1'
+Assert-Equal 'Tổng cục thuế đã nhận' (Get-ExcelValidationLabel 0) 'Validation label for ttxly 0'
+Assert-Equal 'Đã cấp mã hóa đơn' (Get-ExcelValidationLabel 5) 'Validation label for ttxly 5'
+Assert-Equal 'Tổng cục thuế đã nhận hóa đơn có mã khởi tạo từ máy tính tiền' (Get-ExcelValidationLabel 8) 'Validation label for ttxly 8'
+Assert-Equal '' (Get-ExcelValidationLabel 9) 'Validation label beyond the lookup table is empty'
+Assert-Equal 'https://tracuuhoadon.vetc.com.vn/' (Get-ExcelLookupLink -ProviderTaxCode '0100109106' -SellerTaxCode '0101111111' -Mode summary) 'Summary link from provider MST'
+# GDT không trả MSTTCGP thì vẫn tra được bằng MST của bên liên quan.
+Assert-Equal 'https://tracuuhoadon.vetc.com.vn/' (Get-ExcelLookupLink -ProviderTaxCode '' -SellerTaxCode '0100109106' -CounterPartyTaxCodes @('0101111111', '0100109106') -Mode summary) 'Summary link falls back to the counterparty MST'
+Assert-Equal 'https://giaothongso.com.vn/tra-cuu-hoa-don-mtc/' (Get-ExcelLookupLink -ProviderTaxCode '' -SellerTaxCode '0109266456' -CounterPartyTaxCodes @('0109266456') -Mode summary) 'Seller specific link wins for the counterparty MST'
+Assert-Equal 'Khong co link tra cuu' (Get-ExcelLookupLink -ProviderTaxCode '' -SellerTaxCode '0101111111' -CounterPartyTaxCodes @('0101111111') -Mode summary) 'Unknown counterparty keeps the source wording'
+Assert-Equal 'Khong tim thay link tra cuu' (Get-ExcelLookupLink -ProviderTaxCode '' -SellerTaxCode '0101111111' -CounterPartyTaxCodes @('0101111111') -Mode xml) 'Unknown counterparty keeps the source wording in the XML sheet'
+Assert-Equal 'https://gsm-einvoice.hilo.com.vn/' (Get-ExcelLookupLink -ProviderTaxCode '' -SellerTaxCode '0110269067-002' -CounterPartyTaxCodes @('0110269067-002') -Mode summary) 'Hilo seller without provider MST keeps its link'
+# Hàng tổng hợp không có MSTTCGP vẫn ghi link tìm được từ MST đối tác.
+$counterPartySummary = [pscustomobject]@{
+    Direction = 'purchase'; Source = 'query'; InvoiceSeries = 'C26ABC'; InvoiceNumber = '1'
+    Status = 1; ValidationStatus = 0; SellerTaxCode = '0100109106'; BuyerTaxCode = '0101111111'
+    GdtIndex = [pscustomobject]@{ nbmst = '0100109106'; nmmst = '0101111111'; tthai = 1; ttxly = 0 }
+}
+$counterPartyRows = @(New-ExcelSummaryRows @($counterPartySummary))
+Assert-Equal 'https://tracuuhoadon.vetc.com.vn/' $counterPartyRows[0].Row.Cells[55].Value 'Summary row keeps the counterparty lookup link'
+Assert-Equal 'Tổng cục thuế đã nhận' $counterPartyRows[0].Row.Cells[53].Value 'Summary row maps ttxly through the reference labels'
+
+# --- Nap bang tra cuu tu workbook cua nguoi dung (LOOKUP_TABLE_XLSX) ---
+$lookupRoundTrip = Join-Path ([IO.Path]::GetTempPath()) ('hddt-test-' + [guid]::NewGuid().ToString('N') + '.xlsx')
+try {
+    $null = Export-InvoiceWorkbook -Path $lookupRoundTrip -SummaryRows @() -DetailRows @() -ErrorRows @() -Overwrite
+    $builtRows = @(Read-TaiHoaDonDienTuLookupSheet -Path $lookupRoundTrip)
+    Assert-Equal 118 $builtRows.Count 'Exported lookup sheet is readable again'
+    Assert-Equal 'MST' $builtRows[0]['B'] 'Lookup sheet header round-trips'
+    $importedCount = Import-ExcelLookupTable -Path $lookupRoundTrip
+    Assert-Equal 117 $importedCount 'Every reference row is imported back'
+    Assert-Equal 117 @(Get-TaiHoaDonDienTuLookupSheetRows).Count 'Re-importing the same table does not duplicate rows'
+    Assert-Equal 'https://tracuuhoadon.vetc.com.vn/' (Get-TaiHoaDonDienTuLookupLink '0100109106') 'Provider link survives the round-trip'
+    Assert-Equal 'https://giaothongso.com.vn/tra-cuu-hoa-don-mtc/' (Get-TaiHoaDonDienTuSellerLookupLink '0109266456') 'Seller link survives the round-trip'
+
+    $missingLookupTableRejected = $false
+    try { Import-ExcelLookupTable -Path (Join-Path ([IO.Path]::GetTempPath()) 'hddt-khong-ton-tai.xlsx') }
+    catch { $missingLookupTableRejected = $true }
+    Assert-Equal $true $missingLookupTableRejected 'Missing lookup table is reported'
+}
+finally {
+    Remove-Item -LiteralPath $lookupRoundTrip -Force -ErrorAction SilentlyContinue
+}
+
+# Gói thiếu thành phần bắt buộc phải bị chặn trước khi ghi đè workbook cũ,
+# thay vì tạo ra file mà Excel không mở được.
+$incompletePackage = Join-Path ([IO.Path]::GetTempPath()) ('hddt-test-' + [guid]::NewGuid().ToString('N') + '.xlsx')
+try {
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $incompleteStream = [IO.File]::Open($incompletePackage, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $incompleteArchive = New-Object IO.Compression.ZipArchive($incompleteStream, [IO.Compression.ZipArchiveMode]::Create, $false)
+        try {
+            $incompleteEntry = $incompleteArchive.CreateEntry('[Content_Types].xml')
+            $incompleteWriter = New-Object IO.StreamWriter($incompleteEntry.Open())
+            try { $incompleteWriter.Write('<Types />') } finally { $incompleteWriter.Dispose() }
+        }
+        finally { $incompleteArchive.Dispose() }
+    }
+    finally { $incompleteStream.Dispose() }
+    $incompletePackageRejected = $false
+    try { Assert-ExcelPackage -Path $incompletePackage -Parts @() }
+    catch { $incompletePackageRejected = $true }
+    Assert-Equal $true $incompletePackageRejected 'Package without the root relationship part is rejected'
+}
+finally {
+    Remove-Item -LiteralPath $incompletePackage -Force -ErrorAction SilentlyContinue
 }
 
 $tempEnv = Join-Path ([IO.Path]::GetTempPath()) ('hddt-test-' + [guid]::NewGuid().ToString('N') + '.env')
@@ -691,7 +797,7 @@ try {
         Direction = 'purchase'; Source = 'query'; InvoiceSeries = 'C26TABC'; InvoiceNumber = '123'
         Status = 2; RelatedChain = "dong 1`r`ndong 2"; RelatedInfo = 'thong tin lien quan'
     }
-    Export-InvoiceWorkbook -Path $tempWrapXlsx -SummaryRows @($wrapSummary) -DetailRows @() -ErrorRows @() -Overwrite
+    $null = Export-InvoiceWorkbook -Path $tempWrapXlsx -SummaryRows @($wrapSummary) -DetailRows @() -ErrorRows @() -Overwrite
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $wrapZip = [IO.Compression.ZipFile]::OpenRead($tempWrapXlsx)
     try {

@@ -110,18 +110,16 @@ $script:SourceErrorWidths = @(
     45.7109375, 14.7109375, 13.7109375, 24.7109375, 35.7109375
 )
 
-$script:SourceStatusLabels = @(
-    'Tất cả', 'Hóa đơn mới', 'Hóa đơn thay thế', 'Hóa đơn điều chỉnh',
-    'Hóa đơn bị thay thế', 'Hóa đơn đã bị điều chỉnh', 'Hóa đơn bị hủy'
-)
+# Nhãn trạng thái hóa đơn và kết quả kiểm tra lấy từ sheet LinkTraCuu
+# (I2:I8 và O2:O11) nên không thể lệch khỏi bảng tra cứu.
+$script:SourceStatusLabels = @(Get-TaiHoaDonDienTuStatusLabels)
+$script:SourceValidationLabels = @(Get-TaiHoaDonDienTuValidationLabels)
 
-# This is the O2:O11 lookup used by modGhiExcel.bas.  The VBA project keeps
-# this lookup in the LinkTraCuu sheet; the data-only port keeps the same order.
-$script:SourceValidationLabels = @(
-    'Tất cả', 'Đã cấp mã hóa đơn', 'Tổng cục thuế đã nhận không mã',
-    'Tổng cục thuế đã nhận hóa đơn có mã khởi tạo từ máy tính tiền', '', '', '',
-    'Tổng cục thuế đã nhận không mã', 'Đã kiểm tra HĐĐT định kỳ không có mã',
-    'Tổng cục thuế đã nhận hóa đơn có mã khởi tạo từ máy tính tiền'
+# Sheet LinkTraCuu: bảng định tuyến link tra cứu được ghi kèm workbook để
+# người dùng tự thêm/sửa, và chính bảng này sinh ra link ở cột 55/56.
+$script:SourceLookupHeaders = @(Get-TaiHoaDonDienTuLookupHeaders)
+$script:SourceLookupWidths = @(
+    46, 14, 14, 62, 22, 40, 3, 10, 30, 3, 10, 46, 3, 10, 60
 )
 
 function Get-ExcelColumnName {
@@ -260,18 +258,50 @@ function Get-ExcelLookupCode {
     return ''
 }
 
+# Chọn MST dùng để tra bảng LinkTraCuu.  Ưu tiên MSTTCGP (nhà cung cấp T-VAN
+# do GDT trả về).  Khi GDT không trả MSTTCGP - hóa đơn phát hành trực tiếp
+# qua MSSVĐHĐN, hoặc XML không có TTChung/MSTTCGP - thử lần lượt MST của các
+# bên liên quan; nếu bên đó đúng là một nhà cung cấp trong bảng LinkTraCuu thì
+# trang tra cứu của họ vẫn dùng được cho hóa đơn này.
+function Resolve-ExcelLookupTaxCode {
+    param([string]$ProviderTaxCode, [string[]]$CounterPartyTaxCodes)
+    if (-not [string]::IsNullOrWhiteSpace($ProviderTaxCode)) {
+        return $ProviderTaxCode.Trim()
+    }
+    foreach ($taxCode in @(Get-ExcelAdditionalItems $CounterPartyTaxCodes)) {
+        $candidate = ([string]$taxCode).Trim()
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        if (-not [string]::IsNullOrWhiteSpace((Get-TaiHoaDonDienTuSellerLookupLink $candidate))) { return $candidate }
+        if (-not [string]::IsNullOrWhiteSpace((Get-TaiHoaDonDienTuLookupLink $candidate))) { return $candidate }
+    }
+    return ''
+}
+
 function Get-ExcelLookupLink {
     param(
         [string]$ProviderTaxCode,
         [string]$SellerTaxCode,
         [string]$TaxAuthorityCode,
         [string]$InvoiceId,
+        [string[]]$CounterPartyTaxCodes = @(),
         [ValidateSet('summary', 'detail', 'xml')][string]$Mode = 'summary'
     )
-    if ([string]::IsNullOrWhiteSpace($ProviderTaxCode)) {
+    $lookupTaxCode = Resolve-ExcelLookupTaxCode -ProviderTaxCode $ProviderTaxCode -CounterPartyTaxCodes $CounterPartyTaxCodes
+    if ([string]::IsNullOrWhiteSpace($lookupTaxCode)) {
         if ($SellerTaxCode -in @('0110269067', '0110269067-002')) {
             return 'https://gsm-einvoice.hilo.com.vn/'
         }
+        if ($Mode -eq 'xml') { return 'Khong tim thay link tra cuu' }
+        return 'Khong co link tra cuu'
+    }
+
+    # Đường dẫn tìm được nhờ MST bên liên quan: dùng link của chính MST đó,
+    # kể cả link riêng theo người bán (cột C của sheet LinkTraCuu).
+    if ([string]::IsNullOrWhiteSpace($ProviderTaxCode)) {
+        $sellerLink = Get-TaiHoaDonDienTuSellerLookupLink $lookupTaxCode
+        if (-not [string]::IsNullOrWhiteSpace($sellerLink)) { return $sellerLink }
+        $counterPartyLink = Get-TaiHoaDonDienTuLookupLink $lookupTaxCode
+        if (-not [string]::IsNullOrWhiteSpace($counterPartyLink)) { return $counterPartyLink }
         if ($Mode -eq 'xml') { return 'Khong tim thay link tra cuu' }
         return 'Khong co link tra cuu'
     }
@@ -327,11 +357,14 @@ function Get-ExcelStatusLabel {
 }
 
 function Get-ExcelValidationLabel {
+    # Ô đầu tiên của O2:O11 là 'Tất cả', VBA tra bằng ttxly + 2 (mảng 1-based)
+    # nên ttxly N ứng với chỉ số N + 1.
     param($Value)
     $number = 0
     if (-not [int]::TryParse([string]$Value, [ref]$number)) { return '' }
-    if ($number -lt 0 -or $number -ge $script:SourceValidationLabels.Count) { return '' }
-    return $script:SourceValidationLabels[$number]
+    $index = $number + 1
+    if ($index -lt 0 -or $index -ge $script:SourceValidationLabels.Count) { return '' }
+    return $script:SourceValidationLabels[$index]
 }
 
 function New-ExcelDataRow {
@@ -501,10 +534,11 @@ function New-ExcelSummaryRows {
         Set-ExcelDataCell $row 53 (Get-ExcelValidationLabel $validation) 5
 
         $seller = [string](Get-ExcelRawOrFallback $raw $summary 'nbmst' @('SellerTaxCode'))
+        $buyer = [string](Get-ExcelRawOrFallback $raw $summary 'nmmst' @('BuyerTaxCode'))
         $authority = [string](Get-ExcelRawOrFallback $raw $summary 'mhdon' @('TaxAuthorityCode'))
         $provider = [string](Get-ExcelRawOrFallback $raw $summary 'msttcgp' @('ProviderTaxCode'))
         $invoiceId = [string](Get-ExcelRawOrFallback $raw $summary 'id' @('InvoiceId'))
-        $link = Get-ExcelLookupLink -ProviderTaxCode $provider -SellerTaxCode $seller -TaxAuthorityCode $authority -InvoiceId $invoiceId -Mode summary
+        $link = Get-ExcelLookupLink -ProviderTaxCode $provider -SellerTaxCode $seller -TaxAuthorityCode $authority -InvoiceId $invoiceId -CounterPartyTaxCodes @($seller, $buyer) -Mode summary
         $lookupCode = Get-ExcelLookupCode @(
             (Get-ExcelObjectValue $raw 'cttkhac' @()),
             (Get-ExcelObjectValue $raw 'ttkhac' @()),
@@ -625,7 +659,7 @@ function New-ExcelDetailRows {
         $summary = $group.Summary
         $values = Get-ExcelCommonValues $summary
         $provider = $values.ProviderTaxCode
-        $link = Get-ExcelLookupLink -ProviderTaxCode $provider -SellerTaxCode $values.SellerTaxCode -TaxAuthorityCode $values.TaxAuthorityCode -InvoiceId $values.InvoiceId -Mode detail
+        $link = Get-ExcelLookupLink -ProviderTaxCode $provider -SellerTaxCode $values.SellerTaxCode -TaxAuthorityCode $values.TaxAuthorityCode -InvoiceId $values.InvoiceId -CounterPartyTaxCodes @($values.SellerTaxCode, $values.BuyerTaxCode) -Mode detail
         $lookupCode = Get-ExcelText $summary 'LookupCode' ''
         if ([string]::IsNullOrWhiteSpace($lookupCode)) {
             $lookupCode = Get-ExcelLookupCode @(
@@ -699,7 +733,7 @@ function New-ExcelXmlRows {
         $summary = $group.Summary
         $values = Get-ExcelCommonValues $summary
         $provider = $values.ProviderTaxCode
-        $link = Get-ExcelLookupLink -ProviderTaxCode $provider -SellerTaxCode $values.SellerTaxCode -TaxAuthorityCode $values.TaxAuthorityCode -InvoiceId $values.InvoiceId -Mode xml
+        $link = Get-ExcelLookupLink -ProviderTaxCode $provider -SellerTaxCode $values.SellerTaxCode -TaxAuthorityCode $values.TaxAuthorityCode -InvoiceId $values.InvoiceId -CounterPartyTaxCodes @($values.SellerTaxCode, $values.BuyerTaxCode) -Mode xml
         $lookupCode = Get-ExcelText $summary 'LookupCode' ''
         if ([string]::IsNullOrWhiteSpace($lookupCode)) {
             $lookupCode = Get-ExcelLookupCode @(
@@ -830,6 +864,43 @@ function New-ExcelErrorRows {
             elseif ($column -eq 9) { $style = 15 }
             elseif ($column -in @(5, 6, 7, 8, 12, 14, 15)) { $style = 5 }
             Set-ExcelDataCell $row $column $values[$column - 1] $style
+        }
+        $result.Add($row)
+    }
+    return $result.ToArray()
+}
+
+# Nạp bảng LinkTraCuu do người dùng cung cấp (LOOKUP_TABLE_XLSX).  Các dòng
+# thêm vào được ghi lại vào sheet LinkTraCuu của workbook xuất và dùng để tạo
+# link tra cứu, nên người dùng sửa bảng trong Excel là link trong workbook mới
+# đổi theo.
+function Import-ExcelLookupTable {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return 0 }
+    $imported = Import-TaiHoaDonDienTuLookupTable -Path $Path
+    $script:SourceStatusLabels = @(Get-TaiHoaDonDienTuStatusLabels)
+    $script:SourceValidationLabels = @(Get-TaiHoaDonDienTuValidationLabels)
+    return $imported
+}
+
+# Sheet LinkTraCuu: ghi lại nguyên bảng định tuyến tra cứu để người dùng thấy
+# và tự sửa link.  Bảng này cũng chính là nguồn sinh link ở cột 55/56.
+function New-ExcelLookupRows {
+    $result = New-Object System.Collections.Generic.List[object]
+    foreach ($source in @(Get-TaiHoaDonDienTuLookupSheetRows)) {
+        $row = New-ExcelDataRow
+        for ($column = 0; $column -lt $script:TaiHoaDonDienTuLookupColumns.Count; $column++) {
+            $letter = $script:TaiHoaDonDienTuLookupColumns[$column]
+            $value = Get-TaiHoaDonDienTuLookupCell $source $letter
+            if ([string]::IsNullOrWhiteSpace($value)) { continue }
+            $index = $column + 1
+            $style = if ($index -eq 2 -or $index -eq 3) { 16 } else { 5 }
+            $hyperlink = ''
+            if ($index -eq 4 -and $value -match '^https?://') {
+                $style = 10
+                $hyperlink = $value
+            }
+            Set-ExcelDataCell $row $index $value $style $hyperlink
         }
         $result.Add($row)
     }
@@ -1111,6 +1182,49 @@ function Write-ExcelStylesXml {
     Write-TextFileUtf8NoBom $Path $styles
 }
 
+# Đường dẫn part trong gói OOXML phải ghép từng phần tử riêng.  Chuỗi kiểu
+# 'xl\worksheets\sheet1.xml' chỉ đúng trên Windows: Join-Path trên macOS/Linux coi
+# '\' là dấu phân cách, nên '_rels\.rels' trở thành file ẩn '.rels'.  Get-ChildItem
+# mặc định bỏ qua file ẩn, gói xuất ra thiếu hẳn '_rels/.rels' và Excel báo
+# "Sorry, we couldn't open your workbook".
+function Join-ExcelPackagePath {
+    param([Parameter(Mandatory = $true)][string]$Root, [Parameter(Mandatory = $true)][string[]]$Segments)
+    $path = $Root
+    foreach ($segment in $Segments) { $path = Join-Path $path $segment }
+    return $path
+}
+
+# Danh sách part bắt buộc của một gói SpreadsheetML hợp lệ.
+$script:RequiredPackageParts = @(
+    '[Content_Types].xml',
+    '_rels/.rels',
+    'xl/workbook.xml',
+    'xl/_rels/workbook.xml.rels',
+    'xl/styles.xml'
+)
+
+function Add-ExcelPackagePart {
+    param($Parts, [string]$Name, [string]$Path)
+    [void]$Parts.Add([pscustomobject]@{ Name = $Name; Path = $Path })
+}
+
+# Kiểm tra gói vừa ghi trước khi thay thế file cũ, để một gói hỏng bao giờ
+# cũng không thành file người dùng phải mở.
+function Assert-ExcelPackage {
+    param([Parameter(Mandatory = $true)][string]$Path, [object[]]$Parts)
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($Path)
+    try {
+        $entries = @($archive.Entries | ForEach-Object { [string]$_.FullName })
+    }
+    finally { $archive.Dispose() }
+    $expected = @($script:RequiredPackageParts) + @($Parts | ForEach-Object { [string]$_.Name })
+    $missing = @($expected | Where-Object { $entries -notcontains $_ })
+    if ($missing.Count -gt 0) {
+        throw ('Gói Excel không hợp lệ, thiếu thành phần: ' + (($missing | Select-Object -Unique) -join ', '))
+    }
+}
+
 function Export-InvoiceWorkbook {
     [CmdletBinding()]
     param(
@@ -1118,7 +1232,10 @@ function Export-InvoiceWorkbook {
         [Parameter(Mandatory = $true)]$SummaryRows,
         [Parameter(Mandatory = $true)]$DetailRows,
         [Parameter(Mandatory = $true)]$ErrorRows,
-        [switch]$Overwrite
+        [switch]$Overwrite,
+        # Workbook .xlsx có sheet 'LinkTraCuu' do người dùng sửa; các dòng
+        # MST/link trong đó được nối vào bảng tra cứu dùng cho file này.
+        [string]$LookupTablePath = ''
     )
 
     if ((Test-Path -LiteralPath $Path) -and -not $Overwrite) {
@@ -1128,6 +1245,11 @@ function Export-InvoiceWorkbook {
     if ([string]::IsNullOrWhiteSpace($parent)) { $parent = (Get-Location).Path }
     if (-not (Test-Path -LiteralPath $parent)) {
         New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+
+    $importedLookupRows = 0
+    if (-not [string]::IsNullOrWhiteSpace($LookupTablePath)) {
+        $importedLookupRows = Import-ExcelLookupTable -Path $LookupTablePath
     }
 
     $summaryData = New-ExcelSummaryRows $SummaryRows
@@ -1148,23 +1270,32 @@ function Export-InvoiceWorkbook {
         [pscustomobject]@{ Name='TongHopHD_Ban'; Title='HÓA ĐƠN BÁN'; Headers=$script:SourceSummaryHeaders; Rows=$soldSummary; Widths=$script:SourceSummaryWidths; HeaderStyle=2; HeaderRow=2; DataStartRow=3; Freeze=$true; Filter=$false },
         [pscustomobject]@{ Name='ChiTietHD_Ban'; Title='HÓA ĐƠN BÁN - CHI TIẾT'; Headers=$script:SourceDetailHeaders; Rows=$soldDetail; Widths=$script:SourceDetailWidths; HeaderStyle=3; HeaderRow=2; DataStartRow=3; Freeze=$true; Filter=$false },
         [pscustomobject]@{ Name='ChiTietHD_Ban_XML'; Title='HÓA ĐƠN BÁN - CHI TIẾT - XML'; Headers=$script:SourceXmlHeadersSold; Rows=$soldXml; Widths=$script:SourceXmlWidths; HeaderStyle=4; HeaderRow=2; DataStartRow=3; Freeze=$true; Filter=$false },
-        [pscustomobject]@{ Name='BaoCao_LoiTaiHD'; Title=''; Headers=$script:SourceErrorHeaders; Rows=$errorData; Widths=$script:SourceErrorWidths; HeaderStyle=13; HeaderRow=1; DataStartRow=2; Freeze=$true; Filter=$true }
+        [pscustomobject]@{ Name='BaoCao_LoiTaiHD'; Title=''; Headers=$script:SourceErrorHeaders; Rows=$errorData; Widths=$script:SourceErrorWidths; HeaderStyle=13; HeaderRow=1; DataStartRow=2; Freeze=$true; Filter=$true },
+        [pscustomobject]@{ Name='LinkTraCuu'; Title=''; Headers=$script:SourceLookupHeaders; Rows=(New-ExcelLookupRows); Widths=$script:SourceLookupWidths; HeaderStyle=2; HeaderRow=1; DataStartRow=2; Freeze=$true; Filter=$false }
     )
 
     $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('hddt-xlsx-' + [guid]::NewGuid().ToString('N'))
     $stagingPath = Join-Path $parent ('.' + [IO.Path]::GetFileName($Path) + '.hddt-' + [guid]::NewGuid().ToString('N') + '.tmp')
     $backupPath = Join-Path $parent ('.' + [IO.Path]::GetFileName($Path) + '.hddt-' + [guid]::NewGuid().ToString('N') + '.bak')
-    New-Item -ItemType Directory -Path (Join-Path $tempRoot '_rels') -Force | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $tempRoot 'xl\_rels') -Force | Out-Null
-    New-Item -ItemType Directory -Path (Join-Path $tempRoot 'xl\worksheets\_rels') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-ExcelPackagePath $tempRoot @('_rels')) -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-ExcelPackagePath $tempRoot @('xl', '_rels')) -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-ExcelPackagePath $tempRoot @('xl', 'worksheets', '_rels')) -Force | Out-Null
+    # Gói được dựng từ danh sách part tường minh thay vì quét thư mục tạm:
+    # không còn phụ thuộc vào quy tắc file ẩn của hệ điều hành.
+    $packageParts = New-Object System.Collections.Generic.List[object]
     try {
         for ($index = 0; $index -lt $sheetDefinitions.Count; $index++) {
             $sheetNumber = $index + 1
             $sheet = $sheetDefinitions[$index]
-            $sheetPath = Join-Path $tempRoot ('xl\worksheets\sheet{0}.xml' -f $sheetNumber)
+            $sheetPartName = 'xl/worksheets/sheet{0}.xml' -f $sheetNumber
+            $sheetPath = Join-ExcelPackagePath $tempRoot @('xl', 'worksheets', ('sheet{0}.xml' -f $sheetNumber))
             $hyperlinks = Write-ExcelWorksheetXml -Path $sheetPath -Title $sheet.Title -Headers $sheet.Headers -Rows $sheet.Rows -Widths $sheet.Widths -HeaderStyle $sheet.HeaderStyle -HeaderRow $sheet.HeaderRow -DataStartRow $sheet.DataStartRow -FreezeHeader:$sheet.Freeze -AutoFilter:$sheet.Filter
+            Add-ExcelPackagePart $packageParts $sheetPartName $sheetPath
             if (@($hyperlinks).Count -gt 0) {
-                Write-ExcelSheetRelationships -Path (Join-Path $tempRoot ('xl\worksheets\_rels\sheet{0}.xml.rels' -f $sheetNumber)) -Hyperlinks $hyperlinks
+                $sheetRelsPartName = 'xl/worksheets/_rels/sheet{0}.xml.rels' -f $sheetNumber
+                $sheetRelsPath = Join-ExcelPackagePath $tempRoot @('xl', 'worksheets', '_rels', ('sheet{0}.xml.rels' -f $sheetNumber))
+                Write-ExcelSheetRelationships -Path $sheetRelsPath -Hyperlinks $hyperlinks
+                Add-ExcelPackagePart $packageParts $sheetRelsPartName $sheetRelsPath
             }
         }
 
@@ -1175,12 +1306,16 @@ function Export-InvoiceWorkbook {
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="$script:ContentTypeNamespace"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>$($sheetOverrides -join '')</Types>
 "@
-        Write-TextFileUtf8NoBom (Join-Path $tempRoot '[Content_Types].xml') $contentTypes
+        $contentTypesPath = Join-ExcelPackagePath $tempRoot @('[Content_Types].xml')
+        Write-TextFileUtf8NoBom $contentTypesPath $contentTypes
+        Add-ExcelPackagePart $packageParts '[Content_Types].xml' $contentTypesPath
         $rootRels = @"
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="$script:PackageRelationshipNamespace"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>
 "@
-        Write-TextFileUtf8NoBom (Join-Path $tempRoot '_rels\.rels') $rootRels
+        $rootRelsPath = Join-ExcelPackagePath $tempRoot @('_rels', '.rels')
+        Write-TextFileUtf8NoBom $rootRelsPath $rootRels
+        Add-ExcelPackagePart $packageParts '_rels/.rels' $rootRelsPath
         $sheetNodes = for ($index = 0; $index -lt $sheetDefinitions.Count; $index++) {
             '<sheet name="{0}" sheetId="{1}" r:id="rId{1}"/>' -f $sheetDefinitions[$index].Name, ($index + 1)
         }
@@ -1188,7 +1323,9 @@ function Export-InvoiceWorkbook {
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <workbook xmlns="$script:SpreadsheetNamespace" xmlns:r="$script:RelationshipNamespace"><bookViews><workbookView activeTab="0"/></bookViews><sheets>$($sheetNodes -join '')</sheets></workbook>
 "@
-        Write-TextFileUtf8NoBom (Join-Path $tempRoot 'xl\workbook.xml') $workbookXml
+        $workbookPath = Join-ExcelPackagePath $tempRoot @('xl', 'workbook.xml')
+        Write-TextFileUtf8NoBom $workbookPath $workbookXml
+        Add-ExcelPackagePart $packageParts 'xl/workbook.xml' $workbookPath
         $workbookRelationships = for ($index = 0; $index -lt $sheetDefinitions.Count; $index++) {
             '<Relationship Id="rId{0}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{0}.xml"/>' -f ($index + 1)
         }
@@ -1197,8 +1334,12 @@ function Export-InvoiceWorkbook {
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="$script:PackageRelationshipNamespace">$($workbookRelationships -join '')<Relationship Id="rId$stylesRelationshipId" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>
 "@
-        Write-TextFileUtf8NoBom (Join-Path $tempRoot 'xl\_rels\workbook.xml.rels') $workbookRelsXml
-        Write-ExcelStylesXml (Join-Path $tempRoot 'xl\styles.xml')
+        $workbookRelsPath = Join-ExcelPackagePath $tempRoot @('xl', '_rels', 'workbook.xml.rels')
+        Write-TextFileUtf8NoBom $workbookRelsPath $workbookRelsXml
+        Add-ExcelPackagePart $packageParts 'xl/_rels/workbook.xml.rels' $workbookRelsPath
+        $stylesPath = Join-ExcelPackagePath $tempRoot @('xl', 'styles.xml')
+        Write-ExcelStylesXml $stylesPath
+        Add-ExcelPackagePart $packageParts 'xl/styles.xml' $stylesPath
 
         Add-Type -AssemblyName System.IO.Compression
         Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -1206,17 +1347,18 @@ function Export-InvoiceWorkbook {
         try {
             $archive = New-Object IO.Compression.ZipArchive($outputStream, [IO.Compression.ZipArchiveMode]::Create, $false)
             try {
-                foreach ($file in Get-ChildItem -LiteralPath $tempRoot -File -Recurse) {
-                    $entryName = $file.FullName.Substring($tempRoot.Length + 1).Replace('\', '/')
-                    [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $file.FullName, $entryName, [IO.Compression.CompressionLevel]::Optimal)
+                foreach ($part in $packageParts) {
+                    [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $part.Path, $part.Name, [IO.Compression.CompressionLevel]::Optimal)
                 }
             }
             finally { $archive.Dispose() }
         }
         finally { $outputStream.Dispose() }
 
-        # Chỉ thay thế workbook cũ sau khi file tạm đã đóng hoàn toàn. Nếu
-        # file đang mở hoặc thay thế thất bại, bản cũ vẫn còn nguyên.
+        # Chỉ đổi tên file sau khi đã đóng hoàn toàn VÀ đã kiểm tra gói còn đủ
+        # thành phần bắt buộc. Nếu file đang mở, thay thế thất bại hoặc gói
+        # hỏng, bản cũ vẫn còn nguyên.
+        Assert-ExcelPackage -Path $stagingPath -Parts $packageParts.ToArray()
         if (Test-Path -LiteralPath $Path) {
             [IO.File]::Replace($stagingPath, $Path, $backupPath)
             if (Test-Path -LiteralPath $backupPath) { Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue }
@@ -1233,5 +1375,23 @@ function Export-InvoiceWorkbook {
         }
         if (Test-Path -LiteralPath $stagingPath) { Remove-Item -LiteralPath $stagingPath -Force -ErrorAction SilentlyContinue }
         if (Test-Path -LiteralPath $backupPath) { Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue }
+    }
+
+    # Báo lại để người dùng thấy ngay bao nhiêu hóa đơn tìm được link tra cứu;
+    # phần còn lại là hóa đơn không có nhà cung cấp T-VAN trong bảng LinkTraCuu.
+    $summaryRowList = @($purchaseSummary) + @($soldSummary)
+    $linkedCount = 0
+    foreach ($summaryRow in $summaryRowList) {
+        if (-not $summaryRow.Cells.ContainsKey(55)) { continue }
+        if (([string]$summaryRow.Cells[55].Value) -match '^https?://') { $linkedCount++ }
+    }
+    return [pscustomobject]@{
+        Path = $Path
+        SummaryRows = $summaryRowList.Count
+        DetailRows = @($purchaseDetail).Count + @($soldDetail).Count
+        LinksResolved = $linkedCount
+        LinksMissing = $summaryRowList.Count - $linkedCount
+        LookupSheetRows = @(Get-TaiHoaDonDienTuLookupSheetRows).Count
+        ImportedLookupRows = $importedLookupRows
     }
 }
