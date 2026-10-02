@@ -30,7 +30,7 @@ $script:SourceSummaryHeaders = @(
 )
 
 $script:SourceDetailHeaders = @(
-    'Ký hiệu HĐ', 'Số hóa đơn', 'Ngày lập hóa đơn', 'Đơn vị tiền tệ', 'Tỷ giá',
+    'Mẫu số hóa đơn', 'Ký hiệu HĐ', 'Số hóa đơn', 'Ngày lập hóa đơn', 'Đơn vị tiền tệ', 'Tỷ giá',
     'Tên người bán', 'MST người bán', 'Địa chỉ người bán', 'Ngày ký số người bán',
     'Mã CQT', 'Ngày cấp mã CQT', 'Tên người mua', 'MST người mua', 'Địa chỉ người mua',
     'Số thứ tự', 'Tính chất', 'Mã HHDV', 'Tên HHDV', 'DVT', 'Số lượng', 'Đơn giá',
@@ -97,7 +97,7 @@ $script:SourceSummaryWidths = @(
     18.7109375, 18.7109375, 18.7109375, 18.7109375, 18.7109375, 18.7109375, 45.7109375
 )
 $script:SourceDetailWidths = @(
-    9.140625, 12.28515625, 15.85546875, 9.140625, 8, 49.5703125, 19.140625,
+    9.85546875, 9.140625, 12.28515625, 15.85546875, 9.140625, 8, 49.5703125, 19.140625,
     30.42578125, 16.28515625, 40.85546875, 27.5703125, 37.7109375, 15.28515625,
     19.42578125, 9.140625, 9.140625, 11.5703125, 33.28515625, 14.85546875,
     13.7109375, 13.7109375, 9.140625, 14.7109375, 14.7109375, 11.5703125,
@@ -592,6 +592,7 @@ function Get-ExcelObjectNumber {
 function Get-ExcelCommonValues {
     param($Summary)
     return [ordered]@{
+        TemplateCode = Get-ExcelText $Summary 'TemplateCode' ''
         InvoiceSeries = Get-ExcelText $Summary 'InvoiceSeries' ''
         InvoiceNumber = Get-ExcelText $Summary 'InvoiceNumber' ''
         InvoiceDate = ConvertTo-ExcelDate (Get-ExcelObjectValue $Summary 'InvoiceDate' $null)
@@ -614,13 +615,15 @@ function Get-ExcelCommonValues {
 
 function Add-ExcelCommonCells {
     param($Row, $Values, [switch]$ForXml)
-    $columns = 1..14
+    $columns = 1..15
     for ($index = 0; $index -lt $columns.Count; $index++) {
         $column = $columns[$index]
-        $name = @('InvoiceSeries','InvoiceNumber','InvoiceDate','Currency','ExchangeRate','SellerName','SellerTaxCode','SellerAddress','SellerSigningTime','TaxAuthorityCode','TaxAuthoritySigningTime','BuyerName','BuyerTaxCode','BuyerAddress')[$index]
+        $name = @('TemplateCode','InvoiceSeries','InvoiceNumber','InvoiceDate','Currency','ExchangeRate','SellerName','SellerTaxCode','SellerAddress','SellerSigningTime','TaxAuthorityCode','TaxAuthoritySigningTime','BuyerName','BuyerTaxCode','BuyerAddress')[$index]
         $value = $Values[$name]
-        if ($ForXml -and $column -eq 3) { $value = Get-ExcelText $Values $name '' }
-        $style = if ($name -in @('InvoiceDate','SellerSigningTime','TaxAuthoritySigningTime')) { 6 } elseif ($name -eq 'ExchangeRate') { 7 } else { 5 }
+        if ($ForXml -and $column -eq 4) { $value = Get-ExcelText $Values $name '' }
+        # Mẫu số và MST người bán/mua ghi dạng Text để không mất số 0 ở đầu,
+        # đúng như v6.7.4 của bản Excel gốc.
+        $style = if ($name -in @('InvoiceDate','SellerSigningTime','TaxAuthoritySigningTime')) { 6 } elseif ($name -eq 'ExchangeRate') { 7 } elseif ($name -in @('TemplateCode','SellerTaxCode','BuyerTaxCode')) { 16 } else { 5 }
         Set-ExcelDataCell $Row $column $value $style
     }
 }
@@ -686,22 +689,22 @@ function New-ExcelDetailRows {
             $taxType = Get-ExcelText $detail 'TaxType' (Get-ExcelText $detail 'ltsuat' '')
             $taxRate = $amountInfo.Rate
             $rateStyle = if ($taxType -in @('KKKNT', 'KCT')) { 5 } else { 8 }
-            Set-ExcelDataCell $row 15 (Get-ExcelText $detail 'LineNumber' '') 5
-            Set-ExcelDataCell $row 16 (Get-ExcelText $detail 'Nature' '') 5
-            Set-ExcelDataCell $row 17 (Get-ExcelText $detail 'ProductCode' '') 16
-            Set-ExcelDataCell $row 18 (Get-ExcelText $detail 'Description' '') 5
-            Set-ExcelDataCell $row 19 (Get-ExcelText $detail 'Unit' '') 5
-            Set-ExcelDataCell $row 20 (ConvertTo-ExcelNumber (Get-ExcelObjectValue $detail 'Quantity' $null)) 7
-            Set-ExcelDataCell $row 21 (ConvertTo-ExcelNumber (Get-ExcelObjectValue $detail 'UnitPrice' $null)) 7
-            Set-ExcelDataCell $row 22 (ConvertTo-ExcelNumber (Get-ExcelObjectValue $detail 'DiscountRate' $null)) 8
-            Set-ExcelDataCell $row 23 (ConvertTo-ExcelNumber (Get-ExcelObjectValue $detail 'DiscountAmount' $null)) 7
-            Set-ExcelDataCell $row 24 $taxType 5
-            Set-ExcelDataCell $row 25 $taxRate $rateStyle
-            Set-ExcelDataCell $row 26 $amountInfo.Amount 7
-            Set-ExcelDataCell $row 27 $amountInfo.Tax 7
-            Set-ExcelDataCell $row 28 $amountInfo.WithTax 7
+            Set-ExcelDataCell $row 16 (Get-ExcelText $detail 'LineNumber' '') 5
+            Set-ExcelDataCell $row 17 (Get-ExcelText $detail 'Nature' '') 5
+            Set-ExcelDataCell $row 18 (Get-ExcelText $detail 'ProductCode' '') 16
+            Set-ExcelDataCell $row 19 (Get-ExcelText $detail 'Description' '') 5
+            Set-ExcelDataCell $row 20 (Get-ExcelText $detail 'Unit' '') 5
+            Set-ExcelDataCell $row 21 (ConvertTo-ExcelNumber (Get-ExcelObjectValue $detail 'Quantity' $null)) 7
+            Set-ExcelDataCell $row 22 (ConvertTo-ExcelNumber (Get-ExcelObjectValue $detail 'UnitPrice' $null)) 7
+            Set-ExcelDataCell $row 23 (ConvertTo-ExcelNumber (Get-ExcelObjectValue $detail 'DiscountRate' $null)) 8
+            Set-ExcelDataCell $row 24 (ConvertTo-ExcelNumber (Get-ExcelObjectValue $detail 'DiscountAmount' $null)) 7
+            Set-ExcelDataCell $row 25 $taxType 5
+            Set-ExcelDataCell $row 26 $taxRate $rateStyle
+            Set-ExcelDataCell $row 27 $amountInfo.Amount 7
+            Set-ExcelDataCell $row 28 $amountInfo.Tax 7
+            Set-ExcelDataCell $row 29 $amountInfo.WithTax 7
             if ($index -eq 0) {
-                Set-ExcelDataCell $row 29 $totalTax 7
+                Set-ExcelDataCell $row 30 $totalTax 7
                 $validationText = ''
                 $validationStyle = 11
                 if ($totalTax -is [ValueType]) {
@@ -714,11 +717,11 @@ function New-ExcelDetailRows {
                     }
                 }
                 else { $validationStyle = 12 }
-                Set-ExcelDataCell $row 30 $validationText $validationStyle
-                Set-ExcelDataCell $row 31 $provider 16
+                Set-ExcelDataCell $row 31 $validationText $validationStyle
+                Set-ExcelDataCell $row 32 $provider 16
                 $linkStyle = if ($link -match '^https?://') { 10 } else { 5 }
-                Set-ExcelDataCell $row 32 $link $linkStyle $(if ($link -match '^https?://') { $link } else { '' })
-                Set-ExcelDataCell $row 33 $lookupCode 16
+                Set-ExcelDataCell $row 33 $link $linkStyle $(if ($link -match '^https?://') { $link } else { '' })
+                Set-ExcelDataCell $row 34 $lookupCode 16
             }
             $result.Add([pscustomobject]@{ Direction = (Get-ExcelText $summary 'Direction' 'purchase').ToLowerInvariant(); Row = $row })
         }

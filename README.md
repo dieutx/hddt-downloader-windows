@@ -176,6 +176,8 @@ Workbook gồm 8 sheet:
 
 File Excel không có VBA, `MENU` hay `Thamkhao`.
 
+Sheet chi tiết `ChiTietHD_Mua`/`ChiTietHD_Ban` theo bố cục v6.7.4 của bản gốc: cột 1 là `Mẫu số hóa đơn`, tiếp theo là thông tin chung rồi tới từng dòng hàng hóa (34 cột). Mẫu số và MST người bán/mua được ghi dạng Text để giữ số `0` ở đầu.
+
 ### Link tra cứu hóa đơn
 
 Cột **Link tra cứu** (cột 55) và **Mã tra cứu** (cột 56) của `TongHopHD_Mua`/`TongHopHD_Ban` được sinh từ sheet `LinkTraCuu`:
