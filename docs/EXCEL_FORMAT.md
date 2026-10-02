@@ -9,10 +9,10 @@ liệu này sẽ làm người dùng mất dữ liệu đọc được.
 | # | Tên | Dòng tiêu đề | Bắt đầu dữ liệu | Số cột | Bộ lọc |
 |---|---|---|---|---|---|
 | 1 | `TongHopHD_Mua` | 2 (tiêu đề ở dòng 1) | 3 | 64 | không |
-| 2 | `ChiTietHD_Mua` | 2 | 3 | 33 | không |
+| 2 | `ChiTietHD_Mua` | 2 | 3 | 34 | không |
 | 3 | `ChiTietHD_Mua_XML` | 2 | 3 | 32 | không |
 | 4 | `TongHopHD_Ban` | 2 | 3 | 64 | không |
-| 5 | `ChiTietHD_Ban` | 2 | 3 | 33 | không |
+| 5 | `ChiTietHD_Ban` | 2 | 3 | 34 | không |
 | 6 | `ChiTietHD_Ban_XML` | 2 | 3 | 32 | không |
 | 7 | `BaoCao_LoiTaiHD` | 1 | 2 | 17 | có |
 | 8 | `LinkTraCuu` | 1 | 2 | 15 (A..O) | không |
@@ -59,11 +59,15 @@ gốc, không được dồn cột.
 
 ## Sheet chi tiết (2, 5)
 
-Cột 1-14 là thông tin chung của hóa đơn (ký hiệu, số, ngày, tiền tệ, tỷ giá, người
-bán 9-12, mã CQT 13-14, người mua 15-17 tính cả cột trước) rồi tới từng dòng hàng
-hóa: số thứ tự, tính chất, mã/tên hàng, DVT, số lượng, đơn giá, chiết khấu, loại
-thuế suất, thuế suất, thành tiền chưa thuế, tiền thuế, thành tiền có thuế, tổng
-thuế trên HĐ, chênh lệch kê khai thuế, MSTTCGP, link tra cứu, mã tra cứu.
+Theo bản gốc v6.7.4, cột 1 là **Mẫu số hóa đơn** (`khmshdon`), rồi tới cột 2-15 là
+thông tin chung của hóa đơn (ký hiệu, số, ngày, tiền tệ, tỷ giá, người bán 8-11,
+mã CQT 11-12, người mua 13-15) và cuối cùng là từng dòng hàng hóa: số thứ tự 16,
+tính chất, mã/tên hàng, DVT, số lượng, đơn giá, chiết khấu, loại thuế suất, thuế
+suất 26, thành tiền chưa thuế 27, tiền thuế 28, thành tiền có thuế 29, tổng thuế
+trên HĐ 30, chênh lệch kê khai thuế 31, MSTTCGP 32, link tra cứu 33, mã tra cứu 34.
+
+Cột `Mẫu số hóa đơn` và hai cột MST người bán (8) / người mua (14) ghi dạng Text
+(style 16) để giữ nguyên số `0` ở đầu.
 
 ## Sheet chi tiết XML (3, 6)
 

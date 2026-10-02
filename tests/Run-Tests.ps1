@@ -44,7 +44,7 @@ $badDetail = [pscustomobject]@{
 }
 $badDetailRows = @(New-ExcelDetailRows @($badDetail))
 Assert-Equal 1 $badDetailRows.Count 'Malformed nonnumeric tax values remain exportable'
-Assert-Equal 'N/A' $badDetailRows[0].Row.Cells[27].Value 'Malformed tax text is preserved for review'
+Assert-Equal 'N/A' $badDetailRows[0].Row.Cells[28].Value 'Malformed tax text is preserved for review'
 
 $soldXmlSummary = [pscustomobject]@{
     Direction = 'sold'; Source = 'query'; InvoiceId = 'sold-1'; InvoiceSeries = 'C26SOLD'; InvoiceNumber = '9'
@@ -323,10 +323,20 @@ try {
         Assert-Equal 'LOOK-001' (Get-TestCellValue $summarySheet 'BD3') 'Summary lookup code'
 
         $detailSheet = $sheetDocuments[2]
-        $detailRate = Get-TestCellNode $detailSheet 'Y3'
+        # v6.7.4: sheet chi tiết thêm cột 'Mẫu số hóa đơn' ở đầu nên mọi cột
+        # phía sau dịch sang phải một vị trí.
+        Assert-Equal 'Mẫu số hóa đơn' $script:SourceDetailHeaders[0] 'Detail sheet starts with the template-code column'
+        Assert-Equal '1' (Get-TestCellValue $detailSheet 'A3') 'Detail template code comes from KHMSHDon'
+        $detailTemplateCode = Get-TestCellNode $detailSheet 'A3'
+        Assert-Equal '16' $detailTemplateCode.GetAttribute('s') 'Detail template code is written as text'
+        $detailSellerTaxId = Get-TestCellNode $detailSheet 'H3'
+        Assert-Equal '16' $detailSellerTaxId.GetAttribute('s') 'Detail seller tax ID is written as text'
+        $detailBuyerTaxId = Get-TestCellNode $detailSheet 'N3'
+        Assert-Equal '16' $detailBuyerTaxId.GetAttribute('s') 'Detail buyer tax ID is written as text'
+        $detailRate = Get-TestCellNode $detailSheet 'Z3'
         Assert-Equal '8' $detailRate.GetAttribute('s') 'Detail tax rate uses percentage style'
-        Assert-Equal '0.1' (Get-TestCellValue $detailSheet 'Y3') 'Detail tax rate is stored as a fraction'
-        Assert-Equal 'https://tracuuhoadon.vetc.com.vn/' (Get-TestCellValue $detailSheet 'AF3') 'Detail lookup link'
+        Assert-Equal '0.1' (Get-TestCellValue $detailSheet 'Z3') 'Detail tax rate is stored as a fraction'
+        Assert-Equal 'https://tracuuhoadon.vetc.com.vn/' (Get-TestCellValue $detailSheet 'AG3') 'Detail lookup link'
 
         $xmlSheet = $sheetDocuments[3]
         Assert-Equal '2026-09-20' (Get-TestCellValue $xmlSheet 'D3') 'XML sheet keeps source invoice date text'
