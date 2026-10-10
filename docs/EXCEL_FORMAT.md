@@ -75,6 +75,10 @@ Cùng bố cục nhưng `Ngày lập hóa đơn` và `Thuế suất` giữ **d�
 và sheet `ChiTietHD_Ban_XML` giữ `NBan`/`NMua` đúng theo tên node trong XML (không
 đảo nhãn).
 
+Dữ liệu lấy từ API detail sau XML HTTP 500 chỉ ghi vào sheet tổng hợp và chi
+tiết (1, 2, 4, 5); không ghi vào hai sheet XML (3, 6). Trường API thiếu hoặc
+null giữ trống nếu danh sách chưa có giá trị; số lượng/đơn giá không suy diễn.
+
 ## Sheet lỗi (7)
 
 17 cột: STT, thời gian ghi nhận, loại hóa đơn, nguồn API, MST người bán, ký hiệu
@@ -83,6 +87,10 @@ status, nội dung lỗi, số lần đã thử, `Retry-After`, kết quả cu�
 
 Nội dung lỗi đã redact qua `Protect-ExcelErrorText` (bỏ userinfo trong URL, `Bearer`,
 `Authorization`, mật khẩu/proxy). Có `autoFilter`.
+
+Nếu XML HTTP 500 được bổ sung dữ liệu bằng API detail, dòng báo cáo vẫn giữ
+HTTP 500 và lỗi XML gốc; cột kết quả cuối ghi `Da lay du lieu tu API detail`,
+cột ghi chú cho biết dữ liệu đã ghi vào tổng hợp/chi tiết và không có XML gốc.
 
 ## Sheet `LinkTraCuu` (8)
 
@@ -122,7 +130,10 @@ Thứ tự ưu tiên:
 
 Với MSTTCGP có sẵn còn xử lý riêng, giữ như bản gốc: `0100684378` (VNPT) cần
 MCCQT, `0101360697` (BKAV) cần `id` hóa đơn, `0105987432` dựng link từ MST người
-bán. Ô bắt đầu bằng `http://` hoặc `https://` được ghi kèm hyperlink thật.
+bán. Chỉ URL HTTP/HTTPS tuyệt đối, có host và cú pháp hợp lệ mới được ghi kèm
+hyperlink thật. URL mẫu chứa biểu thức ghép MST hoặc URL không hợp lệ vẫn giữ
+nguyên nội dung ô dưới dạng chữ. Writer kiểm tra mọi hyperlink; validator gói
+kiểm tra target của relationship trước khi thay thế file cũ.
 
 ## Kiểu số
 
@@ -134,7 +145,7 @@ Chỉ số truyền vào `Set-ExcelDataCell` là vị trí trong `cellXfs` của
 | 0 | mặc định |
 | 1 | dòng tiêu đề lớn |
 | 2, 3, 4, 13 | dòng tiêu đề bảng (nền khác nhau, xuống dòng) |
-| 5 | chữ (Consolas) |
+| 5 | chữ (Calibri) |
 | 6 | ngày `dd/mm/yyyy` |
 | 7 | số, định dạng kế toán |
 | 8 | phần trăm `0%` |
@@ -147,6 +158,9 @@ Chỉ số truyền vào `Set-ExcelDataCell` là vị trí trong `cellXfs` của
 
 Thêm style mới phải sửa cả `Write-ExcelStylesXml` và giữ `cellXfs count` khớp số
 phần tử.
+
+Toàn bộ font dùng Calibri; các chỉ số style, cỡ chữ, màu và định dạng số giữ
+nguyên. Dữ liệu JSON UTF-8 được giải mã trước khi ghi XML của workbook.
 
 ## Gói `.xlsx` (OPC)
 

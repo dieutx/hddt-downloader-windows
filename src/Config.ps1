@@ -200,10 +200,14 @@ function Get-HddtConfig {
     param(
         [Parameter(Mandatory = $true)][string]$EnvFile,
         [Parameter(Mandatory = $true)][string]$RepositoryRoot,
-        [switch]$Interactive
+        [switch]$Interactive,
+        [hashtable]$Values
     )
 
-    if ($Interactive) {
+    if ($PSBoundParameters.ContainsKey('Values')) {
+        $values = Copy-HddtConfigValues $Values
+    }
+    elseif ($Interactive) {
         $existingValues = @{}
         if (Test-Path -LiteralPath $EnvFile -PathType Leaf) { $existingValues = Read-DotEnvFile -Path $EnvFile }
         $values = Complete-HddtInteractiveValues -Values $existingValues

@@ -12,3 +12,5 @@ logs/
 .idea/
 Thumbs.db
 Desktop.ini
+hddt-settings.json
+hddt-settings.json.*.tmp

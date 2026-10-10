@@ -33,6 +33,7 @@ xuất Excel chỉ cần làm trong `src/ExcelExporter.ps1` và
 | `Login.ps1` | Đọc CAPTCHA SVG, giải mã thành ký tự, đăng nhập, trả token | Token chỉ trong bộ nhớ |
 | `InvoiceApi.ps1` | Danh sách hóa đơn (phân trang theo `state`), tải ZIP XML, chuỗi hóa đơn liên quan | Giữ nguyên item JSON gốc trong `GdtIndex` |
 | `XmlParser.ps1` | XML hóa đơn → `Summary` + `Details` | Đọc `local-name()` nên không phụ thuộc namespace |
+| `InvoiceDetail.ps1` | JSON chi tiết → `Summary` + `Details` khi XML HTTP 500 | Giữ giá trị danh sách nếu detail trả null/rỗng; đánh dấu nguồn `api-detail` |
 | `LinkTraCuu.ps1` | Bảng tra cứu, tên trường mã tra cứu, nhãn `tthai`/`ttxly`, nạp bảng của người dùng | Nguồn dữ liệu tham chiếu duy nhất |
 | `ExcelExporter.ps1` | Dựng workbook `.xlsx` data-only, đóng gói OPC, kiểm tra gói | Không dùng thư viện ngoài |
 
@@ -108,6 +109,20 @@ tổng hợp đã tạo từ danh sách, nhưng **không** ghi đè các trườ
 (`GdtIndex`, `Status`, `RelatedChain`, …). Nhờ vậy hóa đơn tải XML lỗi vẫn còn
 trong tổng hợp kèm dòng lỗi.
 
+Khi request xuất XML nhận HTTP 500, worker gọi `Get-GdtInvoiceDetail` tại
+`/api/query/invoices/detail` với khóa `nbmst`, `khhdon`, `shdon`, `khmshdon`
+của hóa đơn đang tải. Endpoint này dùng profile `InvoiceDetail`, Action mua/bán
+tương ứng, token hiện hành và cùng bộ điều tiết XML (kể cả retry 429).
+Phản hồi phải có `hdhhdvu` và khớp khóa hóa đơn trước khi được sử dụng.
+
+Worker trả JSON và metadata lỗi XML về luồng chính. `Merge-GdtInvoiceData`
+bổ sung dữ liệu vào `GdtIndex`, ưu tiên giá trị detail có nội dung và giữ dữ
+liệu danh sách khi detail trả null/rỗng. `ConvertFrom-GdtInvoiceDetail` ánh xạ
+`hdhhdvu` thành các dòng hàng hóa; trường số thiếu giữ null. `Add-HddtXmlResultRows`
+ghi dữ liệu vào binding tổng hợp/chi tiết, đồng thời ghi kết quả đã phục hồi
+vào báo cáo lỗi. Không tạo XML giả; exporter loại nguồn `api-detail` khỏi sheet
+`_XML`. API detail lỗi thì giữ dòng tổng hợp và ghi lỗi như trước.
+
 ### 5. Hóa đơn liên quan
 
 Hóa đơn trạng thái 2-6 gọi thêm `relative` và `related`, kết quả ghi thẳng vào
@@ -131,6 +146,39 @@ sinh từ chính UA đó, `Accept-Language` tiếng Việt và `Referer` theo en
 (trang chủ cho captcha/đăng nhập, trang tra cứu cho danh sách/tải XML).
 `Request-Id` vẫn sinh mới cho từng request. `LOG_HTTP_PROFILE=true` chỉ in ra
 nhóm header an toàn, không bao giờ in `Authorization` hay `Cookie`.
+
+`Http.ps1` đọc JSON từ `RawContentStream` bằng UTF-8 thay vì phụ thuộc charset
+ngầm của `Invoke-WebRequest`, tránh mất dấu tiếng Việt trên PowerShell 5.1.
+
+## Giao diện Windows
+
+`Start-HddtGui.ps1` nạp WPF từ `ui/MainWindow.xaml` trên luồng STA. Module
+`src/Desktop.ps1` tạo một runspace riêng để gọi hai entry point hiện tại.
+Giao diện đọc stream Information (`Write-Host`) theo timer, hiển thị nhật ký
+và tiến độ mà không chặn luồng cửa sổ.
+
+`ui/AdvancedSettings.xaml` là cửa sổ cài đặt mở từ nút Cài đặt nâng cao.
+`src/DesktopSettings.ps1` quản lý danh sách tham số tải/nhật ký được phép lưu,
+kiểm tra qua cùng `Get-HddtConfig`, và đọc/ghi nguyên tử `hddt-settings.json`
+cạnh app. Không lưu credential, proxy hay đường dẫn dữ liệu. Cài đặt đã lưu
+được nạp lúc mở app; nạp `.env` sau đó hoặc áp dụng cửa sổ cài đặt sẽ ưu tiên
+giá trị mới trong bộ nhớ. Hủy không đổi cấu hình, reset chỉ điền lại các ô và
+chỉ có hiệu lực khi Áp dụng. Nút cài đặt bị khóa khi đang chạy tác vụ.
+
+Hai entry point nhận thêm `-Values` (hashtable cấu hình trong bộ nhớ) và
+`-RunContext` (hashtable đồng bộ chứa cờ dừng). Không truyền credential qua
+command line hoặc file `.env` tạm. Khi không có `-Values`, CLI vẫn đọc `.env`
+hoặc hỏi trực tiếp như trước. `Get-HddtConfig` tiếp tục là validator dùng chung.
+
+`Logging.ps1` giữ context; `Http.ps1` kiểm tra cờ dừng khi chạy từ UI.
+`XmlScheduler.ps1` truyền cùng context vào mọi worker XML. Parse local kiểm tra
+cờ giữa các file, rồi xuất phần đã xử lý; nếu chưa có dữ liệu thì không ghi
+workbook. Đóng cửa sổ lúc đang chạy yêu cầu dừng và chờ tác vụ kết thúc.
+
+`Build-WindowsApp.ps1` dùng trình biên dịch .NET Framework có sẵn trên Windows
+để tạo launcher `ui/Launcher.cs`, gọi Windows PowerShell ở chế độ STA và ẩn
+console. Gói portable có danh sách file mã nguồn tường minh; không đóng gói
+dữ liệu riêng của người dùng. Giao diện luôn dùng `OVERWRITE_OUTPUT=false`.
 
 ## Điểm mở rộng
 

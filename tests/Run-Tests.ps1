@@ -6,6 +6,7 @@ $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $root 'src\Http.ps1')
 . (Join-Path $root 'src\InvoiceApi.ps1')
 . (Join-Path $root 'src\XmlParser.ps1')
+. (Join-Path $root 'src/InvoiceDetail.ps1')
 . (Join-Path $root 'src\ExcelExporter.ps1')
 . (Join-Path $root 'src\Login.ps1')
 . (Join-Path $root 'src\BrowserProfile.ps1')
@@ -373,6 +374,20 @@ try {
         $headerFont = $stylesDocument.SelectSingleNode('/x:styleSheet/x:fonts/x:font[2]', $stylesManager)
         $headerFontOrder = (($headerFont.ChildNodes | ForEach-Object { $_.LocalName }) -join ',')
         Assert-Equal 'sz,name,family' $headerFontOrder 'Header font element order follows Open XML schema'
+        Assert-Equal 'Calibri' $headerFont.SelectSingleNode('x:name', $stylesManager).GetAttribute('val') 'Vietnamese headers use Calibri'
+        Assert-Equal 0 @($stylesDocument.SelectNodes('/x:styleSheet/x:fonts/x:font/x:name[@val="Consolas"]', $stylesManager)).Count 'Workbook uses the same Unicode font for data and titles'
+        $lookupRelationships = [xml](Read-TestZipEntryText $zip 'xl/worksheets/_rels/sheet8.xml.rels')
+        $lookupRelationshipMap = @{}
+        foreach ($relationship in $lookupRelationships.DocumentElement.ChildNodes) {
+            $target = $relationship.GetAttribute('Target')
+            Assert-Equal $false ([string]::IsNullOrWhiteSpace((ConvertTo-ExcelHyperlinkTarget $target))) 'Every lookup hyperlink is a valid absolute web URL'
+            $lookupRelationshipMap[$relationship.GetAttribute('Id')] = $target
+        }
+        foreach ($hyperlink in $lookupSheet.SelectNodes('/x:worksheet/x:hyperlinks/x:hyperlink', $lookupManager)) {
+            $id = $hyperlink.GetAttribute('id', $script:RelationshipNamespace)
+            Assert-Equal $true ($lookupRelationshipMap.ContainsKey($id)) 'Every lookup hyperlink references an existing relationship'
+        }
+        Assert-Equal $true ($lookupSheetText.Contains('mst &amp;')) 'Lookup URL template stays visible as text'
     }
     finally { $zip.Dispose() }
 }
@@ -1494,6 +1509,8 @@ Set-StrictMode -Version 2.0
 $script:HddtSharedState = $null
 $script:HddtLogForwardToShared = $false
 $script:HddtLogLevel = 'INFO'
+$script:HddtRunContext = $null
+function Set-HddtRunContext { param([hashtable]$Context) $script:HddtRunContext = $Context }
 function Set-HddtSharedState { param($Shared) $script:HddtSharedState = $Shared }
 function Get-HddtSharedState { return $script:HddtSharedState }
 function Get-HddtSharedValue {
@@ -1751,14 +1768,127 @@ finally {
     Reset-HddtStopRequest
 }
 
+# --- UI desktop: cau hinh trong bo nho, co dung va runspace parse XML ---
+. (Join-Path $root 'src/Desktop.ps1')
+. (Join-Path $root 'src/DesktopSettings.ps1')
+$defaultDesktopSettings = ConvertTo-HddtDesktopSettings @{}
+Assert-Equal '4' $defaultDesktopSettings.XML_CONCURRENCY 'Advanced settings keep default concurrency'
+Assert-Equal '800' $defaultDesktopSettings.XML_REQUEST_INTERVAL_MS 'Advanced settings keep default interval'
+foreach ($invalidSettings in @(
+    @{ XML_CONCURRENCY = '11' }, @{ XML_CONCURRENCY = '3'; XML_MAX_CONCURRENCY = '2' },
+    @{ XML_CONCURRENCY = '1.5' }, @{ XML_REQUEST_INTERVAL_MS = '-1' },
+    @{ HTTP_TIMEOUT_SECONDS = '4' }, @{ MAX_RETRIES = '11' }, @{ PAGE_SIZE = '101' },
+    @{ XML_RECOVERY_STEP_SECONDS = '0' }, @{ XML_REQUEST_INTERVAL_MS = '60001' }
+)) {
+    $settingsRejected = $false
+    try { $null = ConvertTo-HddtDesktopSettings $invalidSettings } catch { $settingsRejected = $true }
+    Assert-Equal $true $settingsRejected 'Advanced settings reject invalid values through CLI validation'
+}
+$settingsTestPath = Join-Path ([IO.Path]::GetTempPath()) ('hddt-settings-' + [guid]::NewGuid().ToString('N') + '.json')
+try {
+    Save-HddtDesktopSettings $settingsTestPath @{ XML_CONCURRENCY = '2'; GDT_USERNAME = 'synthetic-account'; GDT_PASSWORD = 'synthetic-secret'; PROXY_URL = 'http://synthetic.invalid'; Token = 'synthetic-token' }
+    Assert-Equal '2' (Read-HddtDesktopSettings $settingsTestPath).XML_CONCURRENCY 'Advanced settings round trip'
+    $settingsText = [IO.File]::ReadAllText($settingsTestPath)
+    Assert-Equal $false ($settingsText -like '*synthetic-*') 'Settings persistence excludes every unrelated field and credential'
+    Save-HddtDesktopSettings $settingsTestPath @{ XML_CONCURRENCY = '3' }
+    Assert-Equal '3' (Read-HddtDesktopSettings $settingsTestPath).XML_CONCURRENCY 'Advanced settings atomically replace a previous save'
+    $beforeInvalidSave = [IO.File]::ReadAllText($settingsTestPath)
+    try { Save-HddtDesktopSettings $settingsTestPath @{ XML_CONCURRENCY = '20' } } catch { }
+    Assert-Equal $beforeInvalidSave ([IO.File]::ReadAllText($settingsTestPath)) 'Invalid settings leave the saved file unchanged'
+    [IO.File]::WriteAllText($settingsTestPath, '{bad JSON')
+    $settingsRejected = $false
+    try { $null = Read-HddtDesktopSettings $settingsTestPath } catch { $settingsRejected = $true }
+    Assert-Equal $true $settingsRejected 'Invalid persisted settings fail safely'
+}
+finally { if (Test-Path -LiteralPath $settingsTestPath) { Remove-Item -LiteralPath $settingsTestPath -Force } }
+$desktopValues = @{
+    GDT_USERNAME = 'fake-account'; GDT_PASSWORD = 'fake-secret with spaces'
+    FROM_DATE = '01/01/2026'; TO_DATE = '02/01/2026'; LOG_TO_FILE = 'false'
+}
+$desktopConfig = Get-HddtConfig -EnvFile (Join-Path $root 'missing-desktop.env') -RepositoryRoot $root -Values $desktopValues
+Assert-Equal 'fake-account' $desktopConfig.Username 'Desktop validates values without writing a temporary env'
+Assert-Equal 'fake-secret with spaces' $desktopConfig.Password 'Desktop preserves password spaces'
+Assert-Equal 4 $desktopConfig.XmlMaxConcurrency 'Desktop keeps CLI throttle defaults'
+Assert-Equal 5 $desktopValues.Count 'Desktop validation does not mutate caller values'
+Assert-Equal '[REDACTED]' (Protect-HddtDesktopText 'fake-secret with spaces' @('fake-secret with spaces')) 'Desktop redacts exact secrets including spaces'
+Assert-Equal 'Bearer [REDACTED]' (Protect-HddtDesktopText 'Bearer synthetic-token') 'Desktop log uses existing token redaction'
+$desktopProgress = Get-HddtDesktopProgress '[INFO] [PARSE XML] [3/4 | 75%] fake.xml'
+Assert-Equal 75 $desktopProgress.Percent 'Desktop progress parses existing CLI messages'
+Assert-Equal $null (Get-HddtDesktopProgress '[INFO] Logging started') 'Desktop progress ignores non-progress messages'
+
+$desktopContext = [hashtable]::Synchronized(@{ StopRequested = $false })
+try {
+    Set-HddtRunContext $desktopContext
+    Reset-HddtStopRequest
+    $desktopShared = New-HddtXmlSharedState -Config (New-TestXmlConfig)
+    $desktopContext['StopRequested'] = $true
+    Assert-Equal $true (Test-HddtStopRequested) 'UI stop reaches main HTTP requests'
+    Assert-Equal $true $desktopShared.RunContext.StopRequested 'XML workers receive the same UI stop context'
+    Assert-Equal $false (Register-HddtStopHandler) 'Desktop does not register a console Ctrl+C handler'
+}
+finally {
+    Set-HddtRunContext $null
+    Set-HddtSharedState $null
+    Reset-HddtStopRequest
+}
+
+$desktopTestDirectory = Join-Path ([IO.Path]::GetTempPath()) ('hddt-desktop-' + [guid]::NewGuid().ToString('N'))
+$desktopRun = $null
+try {
+    $localDesktopValues = @{
+        LOCAL_XML_DIR = (Join-Path $PSScriptRoot 'fixtures'); LOCAL_DIRECTION = 'purchase'
+        OUTPUT_DIR = $desktopTestDirectory; LOCAL_OUTPUT_XLSX = 'offline.xlsx'; LOG_TO_FILE = 'false'
+    }
+    $desktopRun = Start-HddtDesktopRun -Root $root -Values $localDesktopValues -Mode 'local'
+    $desktopLogs = New-Object System.Collections.Generic.List[string]
+    $desktopDeadline = [datetime]::UtcNow.AddSeconds(30)
+    while (-not $desktopRun.Handle.IsCompleted -and [datetime]::UtcNow -lt $desktopDeadline) {
+        foreach ($line in @(Receive-HddtDesktopLog $desktopRun)) { $desktopLogs.Add($line) }
+        Start-Sleep -Milliseconds 20
+    }
+    Assert-Equal $true $desktopRun.Handle.IsCompleted 'Desktop offline task completes in a background runspace'
+    foreach ($line in @(Receive-HddtDesktopLog $desktopRun)) { $desktopLogs.Add($line) }
+    Complete-HddtDesktopRun $desktopRun
+    Assert-Equal 0 $desktopRun.Context.ExitCode 'Desktop receives the entry point exit code'
+    Assert-Equal $true (Test-Path -LiteralPath (Join-Path $desktopTestDirectory 'offline.xlsx')) 'Desktop offline task produces an actual workbook'
+    Assert-Equal $true ($desktopLogs.Count -gt 0) 'Desktop receives Write-Host logs from its background task'
+    Assert-Equal 0 $desktopRun.Values.Count 'Desktop clears transmitted values when finished'
+    Assert-Equal $false (Test-Path -LiteralPath (Join-Path $desktopTestDirectory '.env')) 'Desktop never writes credentials to a temporary env'
+
+    # Lan chay thu hai phai bao loi va giu nguyen workbook da co.
+    $beforeDesktopWorkbook = [Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $desktopTestDirectory 'offline.xlsx')))
+    $desktopRun = Start-HddtDesktopRun -Root $root -Values $localDesktopValues -Mode 'local'
+    $desktopDeadline = [datetime]::UtcNow.AddSeconds(30)
+    while (-not $desktopRun.Handle.IsCompleted -and [datetime]::UtcNow -lt $desktopDeadline) { Start-Sleep -Milliseconds 20 }
+    Assert-Equal $true $desktopRun.Handle.IsCompleted 'Desktop error task finishes'
+    Complete-HddtDesktopRun $desktopRun
+    Assert-Equal 1 $desktopRun.Context.ExitCode 'Desktop propagates workbook overwrite refusal'
+    Assert-Equal $beforeDesktopWorkbook ([Convert]::ToBase64String([IO.File]::ReadAllBytes((Join-Path $desktopTestDirectory 'offline.xlsx')))) 'Desktop keeps an existing workbook byte for byte'
+}
+finally {
+    if ($null -ne $desktopRun -and -not $desktopRun.Disposed) {
+        Request-HddtDesktopStop $desktopRun
+        $desktopRun.Pipeline.Stop()
+        $desktopRun.Pipeline.Dispose()
+        $desktopRun.Runspace.Dispose()
+    }
+    $resolvedDesktopDirectory = [IO.Path]::GetFullPath($desktopTestDirectory)
+    $allowedDesktopPrefix = Join-Path ([IO.Path]::GetFullPath([IO.Path]::GetTempPath())) 'hddt-desktop-'
+    if (-not $resolvedDesktopDirectory.StartsWith($allowedDesktopPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Thu muc kiem thu nam ngoai thu muc tam.' }
+    if (Test-Path -LiteralPath $resolvedDesktopDirectory) { Remove-Item -LiteralPath $resolvedDesktopDirectory -Recurse -Force }
+}
+
 # --- Kiem tra cu phap toan bo script (bat loi encoding/thieu dau) ---
 $scriptPaths = @((Join-Path $root 'Invoke-Hddt.ps1'), (Join-Path $root 'Parse-LocalXml.ps1'))
 $scriptPaths += @(Get-ChildItem -LiteralPath (Join-Path $root 'src') -Filter '*.ps1' | ForEach-Object { $_.FullName })
+$scriptPaths += @((Join-Path $root 'Start-HddtGui.ps1'), (Join-Path $root 'Build-WindowsApp.ps1'))
 foreach ($scriptPath in $scriptPaths) {
     $tokens = $null
     $parseErrors = $null
     [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$parseErrors) | Out-Null
     Assert-Equal 0 (@($parseErrors).Count) ('No parse error in ' + (Split-Path -Leaf $scriptPath))
 }
+
+. (Join-Path $PSScriptRoot 'Test-InvoiceDetail.ps1')
 
 Write-Host 'All tests passed.' -ForegroundColor Green

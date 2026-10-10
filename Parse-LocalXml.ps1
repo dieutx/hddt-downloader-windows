@@ -1,7 +1,9 @@
 ﻿[CmdletBinding()]
 param(
     [string]$EnvFile,
-    [switch]$Interactive
+    [switch]$Interactive,
+    [hashtable]$Values,
+    [hashtable]$RunContext
 )
 
 Set-StrictMode -Version 2.0
@@ -16,12 +18,17 @@ if ([string]::IsNullOrWhiteSpace($EnvFile)) {
 . (Join-Path $PSScriptRoot 'src\XmlParser.ps1')
 . (Join-Path $PSScriptRoot 'src\ExcelExporter.ps1')
 
+Set-HddtRunContext -Context $RunContext
+
 Initialize-HddtConsole
 $loggingStarted = $false
 $stopwatch = [Diagnostics.Stopwatch]::StartNew()
 
 try {
-    if ($Interactive) {
+    if ($PSBoundParameters.ContainsKey('Values')) {
+        $values = Copy-HddtConfigValues $Values
+    }
+    elseif ($Interactive) {
         $existingValues = @{}
         if (Test-Path -LiteralPath $EnvFile -PathType Leaf) { $existingValues = Read-DotEnvFile -Path $EnvFile }
         $values = Complete-HddtLocalInteractiveValues -Values $existingValues
@@ -83,6 +90,7 @@ try {
     $current = 0
 
     foreach ($file in $xmlFiles) {
+        if (Test-HddtRunStopRequested) { break }
         $current++
         $fileDirection = $direction
         Write-HddtLog DEBUG ('Đang parse {0}' -f $file.FullName)
@@ -119,6 +127,11 @@ try {
         }
     }
 
+    if ((Test-HddtRunStopRequested) -and $summaryRows.Count -eq 0 -and $errorRows.Count -eq 0) {
+        Write-HddtLog WARN '[STOP] Da dung khi chua co du lieu; khong ghi file Excel.'
+        exit 0
+    }
+    if (Test-HddtRunStopRequested) { Write-HddtLog WARN '[STOP] Xuat phan XML da xu ly truoc khi dung.' }
     Write-HddtLog INFO ('[XUẤT FILE] Tạo workbook: tổng hợp {0} | chi tiết {1} | lỗi {2}.' -f $summaryRows.Count, $detailRows.Count, $errorRows.Count)
     $export = Export-InvoiceWorkbook -Path $outputWorkbook -SummaryRows ($summaryRows.ToArray()) -DetailRows ($detailRows.ToArray()) -ErrorRows ($errorRows.ToArray()) -Overwrite:$overwrite -LookupTablePath $lookupTableXlsx
     Write-HddtLog INFO ('[XUẤT FILE] Link tra cứu: {0}/{1} hóa đơn có link | bảng LinkTraCuu {2} dòng.' -f $export.LinksResolved, $export.SummaryRows, $export.LookupSheetRows)

@@ -1,0 +1,72 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Cài đặt nâng cao" Width="720" Height="750" MinWidth="620" MinHeight="480"
+        WindowStartupLocation="CenterOwner" Background="#F3F6FA" FontFamily="Segoe UI" FontSize="14">
+  <Window.Resources>
+    <Style TargetType="TextBox">
+      <Setter Property="Padding" Value="10,7"/><Setter Property="MinHeight" Value="36"/>
+      <Setter Property="BorderBrush" Value="#CBD5E1"/>
+    </Style>
+    <Style TargetType="Button">
+      <Setter Property="Padding" Value="14,8"/><Setter Property="MinHeight" Value="36"/>
+      <Setter Property="Cursor" Value="Hand"/><Setter Property="Background" Value="White"/>
+      <Setter Property="BorderBrush" Value="#CBD5E1"/>
+    </Style>
+    <Style x:Key="Label" TargetType="TextBlock">
+      <Setter Property="Margin" Value="0,0,0,6"/><Setter Property="Foreground" Value="#475569"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+  </Window.Resources>
+  <Grid Margin="24,20">
+    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <StackPanel Margin="0,0,0,16">
+      <TextBlock Text="Cài đặt nâng cao" FontSize="24" FontWeight="SemiBold" Foreground="#0F172A"/>
+      <TextBlock Text="Áp dụng từ lần chạy tiếp theo. Có thể khôi phục mặc định bất cứ lúc nào." TextWrapping="Wrap" Foreground="#64748B" Margin="0,6,0,0"/>
+    </StackPanel>
+    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+      <StackPanel Margin="0,0,12,0">
+        <Border Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="8" Padding="16">
+          <StackPanel>
+            <TextBlock Text="Tải XML song song" FontWeight="SemiBold" FontSize="16" Margin="0,0,0,14"/>
+            <Grid>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="20"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+              <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+              <StackPanel><TextBlock Text="Kết nối ban đầu (1–10)" Style="{StaticResource Label}"/><TextBox x:Name="XML_CONCURRENCY"/></StackPanel>
+              <StackPanel Grid.Column="2"><TextBlock Text="Kết nối tối đa / số worker (1–10)" Style="{StaticResource Label}"/><TextBox x:Name="XML_MAX_CONCURRENCY"/></StackPanel>
+              <StackPanel Grid.Row="1" Margin="0,12,0,0"><TextBlock Text="Giãn cách request (ms, 0–60000)" Style="{StaticResource Label}"/><TextBox x:Name="XML_REQUEST_INTERVAL_MS"/></StackPanel>
+              <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,12,0,0"><TextBlock Text="Phục hồi sau 429 (giây, 1–3600)" Style="{StaticResource Label}"/><TextBox x:Name="XML_RECOVERY_STEP_SECONDS"/></StackPanel>
+            </Grid>
+            <TextBlock Text="Kết nối ban đầu phải ≤ kết nối tối đa. Khi gặp HTTP 429, app tự giảm tải rồi phục hồi từng bước. API detail dùng chung các giới hạn này." Foreground="#64748B" FontSize="12" TextWrapping="Wrap" Margin="0,12,0,0"/>
+          </StackPanel>
+        </Border>
+        <Border Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="8" Padding="16" Margin="0,14,0,0">
+          <StackPanel>
+            <TextBlock Text="Kết nối và danh sách hóa đơn" FontWeight="SemiBold" FontSize="16" Margin="0,0,0,14"/>
+            <Grid>
+              <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="20"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+              <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+              <StackPanel><TextBlock Text="Giãn cách API danh sách (ms, 0–60000)" Style="{StaticResource Label}"/><TextBox x:Name="REQUEST_DELAY_MS"/></StackPanel>
+              <StackPanel Grid.Column="2"><TextBlock Text="Số lần thử lại lỗi mạng / 5xx (0–10)" Style="{StaticResource Label}"/><TextBox x:Name="MAX_RETRIES"/></StackPanel>
+              <StackPanel Grid.Row="1" Margin="0,12,0,0"><TextBlock Text="Timeout request (giây, 5–600)" Style="{StaticResource Label}"/><TextBox x:Name="HTTP_TIMEOUT_SECONDS"/></StackPanel>
+              <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,12,0,0"><TextBlock Text="Hóa đơn mỗi trang (1–100)" Style="{StaticResource Label}"/><TextBox x:Name="PAGE_SIZE"/></StackPanel>
+            </Grid>
+            <CheckBox x:Name="ADAPTIVE_THROTTLE" Content="Tự điều tiết API danh sách" Margin="0,14,0,0"/>
+            <CheckBox x:Name="LOG_TO_FILE" Content="Ghi nhật ký ra file" Margin="0,10,0,0"/>
+          </StackPanel>
+        </Border>
+      </StackPanel>
+    </ScrollViewer>
+    <StackPanel Grid.Row="2" Margin="0,16,0,0">
+      <CheckBox x:Name="RememberSettings" Content="Ghi nhớ cho lần mở app sau" IsChecked="True"/>
+      <TextBlock Text="Chỉ ghi tham số tải và nhật ký vào hddt-settings.json cạnh app." Foreground="#64748B" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
+      <TextBlock x:Name="SettingsError" Foreground="#B91C1C" TextWrapping="Wrap" Margin="0,8,0,0"/>
+      <Grid Margin="0,10,0,0">
+        <Button x:Name="ResetSettings" Content="Khôi phục mặc định" HorizontalAlignment="Left"/>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+          <Button x:Name="CancelSettings" Content="Hủy" MinWidth="80"/>
+          <Button x:Name="ApplySettings" Content="Áp dụng" Background="#2563EB" Foreground="White" BorderBrush="#2563EB" Margin="10,0,0,0" IsDefault="True"/>
+        </StackPanel>
+      </Grid>
+    </StackPanel>
+  </Grid>
+</Window>

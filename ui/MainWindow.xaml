@@ -1,0 +1,152 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="HDDT Downloader" Width="1000" Height="860" MinWidth="820" MinHeight="680"
+        WindowStartupLocation="CenterScreen" Background="#F3F6FA" FontFamily="Segoe UI" FontSize="14">
+  <Window.Resources>
+    <Style TargetType="TextBox">
+      <Setter Property="Padding" Value="10,7"/><Setter Property="MinHeight" Value="36"/>
+      <Setter Property="BorderBrush" Value="#CBD5E1"/><Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+    <Style TargetType="PasswordBox">
+      <Setter Property="Padding" Value="10,7"/><Setter Property="MinHeight" Value="36"/>
+      <Setter Property="BorderBrush" Value="#CBD5E1"/>
+    </Style>
+    <Style TargetType="Button">
+      <Setter Property="Padding" Value="14,8"/><Setter Property="MinHeight" Value="36"/>
+      <Setter Property="Cursor" Value="Hand"/><Setter Property="Background" Value="White"/>
+      <Setter Property="BorderBrush" Value="#CBD5E1"/>
+    </Style>
+    <Style TargetType="ComboBox">
+      <Setter Property="MinHeight" Value="36"/><Setter Property="Padding" Value="8,6"/>
+      <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+    <Style TargetType="DatePicker"><Setter Property="MinHeight" Value="36"/></Style>
+    <Style TargetType="CheckBox"><Setter Property="Margin" Value="0,5,18,5"/></Style>
+    <Style x:Key="FieldLabel" TargetType="TextBlock">
+      <Setter Property="Margin" Value="0,0,0,6"/><Setter Property="Foreground" Value="#475569"/>
+    </Style>
+  </Window.Resources>
+  <Grid Margin="24,20">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="2*" MinHeight="180" MaxHeight="330"/>
+      <RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*" MinHeight="100"/>
+      <RowDefinition Height="Auto"/>
+    </Grid.RowDefinitions>
+    <Grid Margin="0,0,0,18">
+      <StackPanel>
+        <TextBlock Text="HDDT Downloader" FontSize="27" FontWeight="SemiBold" Foreground="#0F172A"/>
+        <TextBlock Text="Tải hóa đơn điện tử và xuất Excel trên máy của bạn" Foreground="#64748B" Margin="0,6,0,0"/>
+      </StackPanel>
+      <Border HorizontalAlignment="Right" VerticalAlignment="Center" Background="#DBEAFE" CornerRadius="6" Padding="12,7">
+        <TextBlock Text="Windows 10 / 11" Foreground="#1D4ED8" FontSize="12"/>
+      </Border>
+    </Grid>
+    <Grid Grid.Row="1" Margin="0,0,0,12">
+      <TextBlock Text="Chọn chế độ và điền thông tin để bắt đầu." VerticalAlignment="Center" Foreground="#475569"/>
+      <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+        <Button x:Name="AdvancedSettings" Content="Cài đặt nâng cao" Margin="0,0,10,0"/>
+        <Button x:Name="LoadConfig" Content="Nạp cấu hình .env"/>
+      </StackPanel>
+    </Grid>
+    <Border Grid.Row="2" Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="8" Padding="14">
+      <ScrollViewer VerticalScrollBarVisibility="Auto" MaxHeight="330">
+        <TabControl x:Name="ModeTabs" BorderThickness="0" Background="White">
+          <TabItem Header="  Tải từ GDT  ">
+            <StackPanel Margin="4,14,4,4">
+              <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="24"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                <StackPanel>
+                  <TextBlock Text="Tài khoản / Mã số thuế" Style="{StaticResource FieldLabel}"/>
+                  <TextBox x:Name="Username"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2">
+                  <TextBlock Text="Mật khẩu GDT" Style="{StaticResource FieldLabel}"/>
+                  <PasswordBox x:Name="Password"/>
+                </StackPanel>
+                <StackPanel Grid.Row="1" Margin="0,12,0,0">
+                  <TextBlock Text="Từ ngày" Style="{StaticResource FieldLabel}"/>
+                  <DatePicker x:Name="FromDate" SelectedDateFormat="Short" Language="vi-VN"/>
+                </StackPanel>
+                <StackPanel Grid.Row="1" Grid.Column="2" Margin="0,12,0,0">
+                  <TextBlock Text="Đến ngày" Style="{StaticResource FieldLabel}"/>
+                  <DatePicker x:Name="ToDate" SelectedDateFormat="Short" Language="vi-VN"/>
+                </StackPanel>
+                <StackPanel Grid.Row="2" Margin="0,12,0,0">
+                  <TextBlock Text="Chiều hóa đơn" Style="{StaticResource FieldLabel}"/>
+                  <ComboBox x:Name="Direction" SelectedIndex="0">
+                    <ComboBoxItem Content="Mua vào và bán ra" Tag="both"/>
+                    <ComboBoxItem Content="Mua vào" Tag="purchase"/>
+                    <ComboBoxItem Content="Bán ra" Tag="sold"/>
+                  </ComboBox>
+                </StackPanel>
+                <StackPanel Grid.Row="2" Grid.Column="2" Margin="0,12,0,0">
+                  <TextBlock Text="Nguồn hóa đơn" Style="{StaticResource FieldLabel}"/>
+                  <WrapPanel>
+                    <CheckBox x:Name="IncludeRegular" Content="Thông thường" IsChecked="True"/>
+                    <CheckBox x:Name="IncludeSco" Content="Máy tính tiền" IsChecked="True"/>
+                  </WrapPanel>
+                </StackPanel>
+              </Grid>
+              <Expander Header="Proxy và tùy chọn tải" Margin="0,14,0,0">
+                <StackPanel Margin="0,10,0,0">
+                  <TextBlock Text="Proxy URL (để trống nếu không dùng)" Style="{StaticResource FieldLabel}"/>
+                  <TextBox x:Name="ProxyUrl"/>
+                  <Grid Margin="0,10,0,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="24"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                    <StackPanel><TextBlock Text="Tài khoản proxy" Style="{StaticResource FieldLabel}"/><TextBox x:Name="ProxyUsername"/></StackPanel>
+                    <StackPanel Grid.Column="2"><TextBlock Text="Mật khẩu proxy" Style="{StaticResource FieldLabel}"/><PasswordBox x:Name="ProxyPassword"/></StackPanel>
+                  </Grid>
+                  <WrapPanel Margin="0,8,0,0">
+                    <CheckBox x:Name="FetchRelated" Content="Lấy hóa đơn liên quan" IsChecked="True"/>
+                    <CheckBox x:Name="RedownloadXml" Content="Tải lại XML đã có"/>
+                  </WrapPanel>
+                </StackPanel>
+              </Expander>
+            </StackPanel>
+          </TabItem>
+          <TabItem Header="  XML có sẵn → Excel  ">
+            <StackPanel Margin="4,14,4,4">
+              <TextBlock Text="Chuyển XML có sẵn sang Excel, không cần đăng nhập hoặc Internet." Foreground="#64748B" TextWrapping="Wrap" Margin="0,0,0,16"/>
+              <TextBlock Text="Thư mục chứa XML (bao gồm thư mục con)" Style="{StaticResource FieldLabel}"/>
+              <DockPanel><Button x:Name="BrowseXml" Content="Chọn thư mục" DockPanel.Dock="Right" Margin="10,0,0,0"/><TextBox x:Name="XmlDirectory"/></DockPanel>
+              <TextBlock Text="Chiều hóa đơn" Style="{StaticResource FieldLabel}" Margin="0,14,0,6"/>
+              <ComboBox x:Name="LocalDirection" SelectedIndex="0">
+                <ComboBoxItem Content="Tự nhận diện theo thư mục / tên file" Tag="auto"/>
+                <ComboBoxItem Content="Mua vào" Tag="purchase"/>
+                <ComboBoxItem Content="Bán ra" Tag="sold"/>
+              </ComboBox>
+            </StackPanel>
+          </TabItem>
+        </TabControl>
+      </ScrollViewer>
+    </Border>
+    <StackPanel Grid.Row="3" Margin="0,14,0,0">
+      <TextBlock Text="File Excel đầu ra" Style="{StaticResource FieldLabel}"/>
+      <DockPanel><Button x:Name="BrowseOutput" Content="Chọn nơi lưu" DockPanel.Dock="Right" Margin="10,0,0,0"/><TextBox x:Name="OutputPath"/></DockPanel>
+    </StackPanel>
+    <StackPanel Grid.Row="4" Margin="0,16,0,14">
+      <Grid>
+        <StackPanel Orientation="Horizontal">
+          <Button x:Name="StartRun" Content="Bắt đầu" Background="#2563EB" Foreground="White" BorderBrush="#2563EB" FontWeight="SemiBold" MinWidth="120"/>
+          <Button x:Name="StopRun" Content="Dừng an toàn" IsEnabled="False" Margin="10,0,0,0"/>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+          <Button x:Name="OpenExcel" Content="Mở Excel" IsEnabled="False"/>
+          <Button x:Name="OpenFolder" Content="Mở thư mục" Margin="10,0,0,0"/>
+        </StackPanel>
+      </Grid>
+      <TextBlock x:Name="Status" Text="Sẵn sàng" Margin="0,12,0,7" Foreground="#475569" TextWrapping="Wrap"/>
+      <ProgressBar x:Name="Progress" Height="6" Minimum="0" Maximum="100" Foreground="#2563EB" Background="#E2E8F0" BorderThickness="0"/>
+    </StackPanel>
+    <Border Grid.Row="5" Background="#0F172A" CornerRadius="8" Padding="14,10" MinHeight="100">
+      <DockPanel>
+        <TextBlock Text="NHẬT KÝ XỬ LÝ" DockPanel.Dock="Top" Foreground="#94A3B8" FontSize="11" FontWeight="SemiBold" Margin="0,0,0,8"/>
+        <TextBox x:Name="Log" IsReadOnly="True" Background="Transparent" Foreground="#E2E8F0" BorderThickness="0" Padding="0"
+                 FontFamily="Consolas" FontSize="12" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"/>
+      </DockPanel>
+    </Border>
+    <TextBlock Grid.Row="6" Text="Mật khẩu chỉ dùng trong phiên chạy • XML và Excel lưu trên máy • Không ghi đè file Excel đã có"
+               Foreground="#64748B" FontSize="11" Margin="0,12,0,0" TextWrapping="Wrap"/>
+  </Grid>
+</Window>

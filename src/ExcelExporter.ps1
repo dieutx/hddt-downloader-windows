@@ -382,6 +382,16 @@ function Set-ExcelDataCell {
     $Row.Cells[$Column] = [pscustomobject]@{ Value = $Value; Style = $Style; Hyperlink = $Hyperlink }
 }
 
+# URL mau/chua ghep MST van giu dang text, khong tao relationship khong hop le.
+function ConvertTo-ExcelHyperlinkTarget {
+    param([string]$Target)
+    if ([string]::IsNullOrWhiteSpace($Target)) { return '' }
+    $uri = $null
+    if (-not [Uri]::TryCreate($Target, [UriKind]::Absolute, [ref]$uri)) { return '' }
+    if ($uri.Scheme -notin @('http', 'https') -or [string]::IsNullOrWhiteSpace($uri.Host) -or -not $uri.IsWellFormedOriginalString()) { return '' }
+    return $uri.AbsoluteUri
+}
+
 function Get-ExcelRowHeight {
     param([string[]]$Texts)
     $lineCount = 1
@@ -731,6 +741,7 @@ function New-ExcelDetailRows {
 
 function New-ExcelXmlRows {
     param($Rows)
+    $Rows = @($Rows | Where-Object { (Get-ExcelText $_ 'Source' '') -ne 'api-detail' })
     $result = New-Object System.Collections.Generic.List[object]
     foreach ($group in @(Get-ExcelDetailGroups $Rows)) {
         $summary = $group.Summary
@@ -899,9 +910,9 @@ function New-ExcelLookupRows {
             $index = $column + 1
             $style = if ($index -eq 2 -or $index -eq 3) { 16 } else { 5 }
             $hyperlink = ''
-            if ($index -eq 4 -and $value -match '^https?://') {
-                $style = 10
-                $hyperlink = $value
+            if ($index -eq 4) {
+                $hyperlink = ConvertTo-ExcelHyperlinkTarget $value
+                if (-not [string]::IsNullOrWhiteSpace($hyperlink)) { $style = 10 }
             }
             Set-ExcelDataCell $row $index $value $style $hyperlink
         }
@@ -1054,8 +1065,9 @@ function Write-ExcelWorksheetXml {
                 $cell = $record.Cells[$column]
                 $reference = (Get-ExcelColumnName ([int]$column)) + $excelRow
                 Write-ExcelCell -Writer $writer -Reference $reference -Value $cell.Value -Style ([int]$cell.Style)
-                if (-not [string]::IsNullOrWhiteSpace([string]$cell.Hyperlink)) {
-                    $hyperlinks.Add([pscustomobject]@{ Reference = $reference; Target = [string]$cell.Hyperlink })
+                $target = ConvertTo-ExcelHyperlinkTarget ([string]$cell.Hyperlink)
+                if (-not [string]::IsNullOrWhiteSpace($target)) {
+                    $hyperlinks.Add([pscustomobject]@{ Reference = $reference; Target = $target })
                 }
             }
             $writer.WriteEndElement()
@@ -1138,11 +1150,11 @@ function Write-ExcelStylesXml {
   </numFmts>
   <fonts count="7">
     <font><sz val="11"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>
-    <font><sz val="11"/><name val="Consolas"/><family val="3"/></font>
-    <font><b/><sz val="18"/><color rgb="FF7030A0"/><name val="Consolas"/><family val="3"/></font>
-    <font><u/><color rgb="FF0563C1"/><sz val="11"/><name val="Consolas"/><family val="3"/></font>
-    <font><color rgb="FF0000FF"/><sz val="11"/><name val="Consolas"/><family val="3"/></font>
-    <font><color rgb="FFFF0000"/><sz val="11"/><name val="Consolas"/><family val="3"/></font>
+    <font><sz val="11"/><name val="Calibri"/><family val="2"/></font>
+    <font><b/><sz val="18"/><color rgb="FF7030A0"/><name val="Calibri"/><family val="2"/></font>
+    <font><u/><color rgb="FF0563C1"/><sz val="11"/><name val="Calibri"/><family val="2"/></font>
+    <font><color rgb="FF0000FF"/><sz val="11"/><name val="Calibri"/><family val="2"/></font>
+    <font><color rgb="FFFF0000"/><sz val="11"/><name val="Calibri"/><family val="2"/></font>
     <font><b/><sz val="11"/><name val="Calibri"/><family val="2"/></font>
   </fonts>
   <fills count="6">
@@ -1219,6 +1231,26 @@ function Assert-ExcelPackage {
     $archive = [IO.Compression.ZipFile]::OpenRead($Path)
     try {
         $entries = @($archive.Entries | ForEach-Object { [string]$_.FullName })
+        foreach ($entry in @($archive.Entries | Where-Object { $_.FullName -like 'xl/worksheets/_rels/*.rels' })) {
+            $settings = New-Object Xml.XmlReaderSettings
+            $settings.DtdProcessing = [Xml.DtdProcessing]::Prohibit
+            $settings.XmlResolver = $null
+            $stream = $entry.Open()
+            $reader = [Xml.XmlReader]::Create($stream, $settings)
+            try {
+                $document = New-Object Xml.XmlDocument
+                $document.XmlResolver = $null
+                $document.Load($reader)
+            }
+            finally { $reader.Dispose(); $stream.Dispose() }
+            foreach ($relationship in $document.SelectNodes('/*[local-name()="Relationships"]/*[local-name()="Relationship"]')) {
+                if ($relationship.GetAttribute('Type') -eq 'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink') {
+                    if ([string]::IsNullOrWhiteSpace((ConvertTo-ExcelHyperlinkTarget $relationship.GetAttribute('Target')))) {
+                        throw ('Goi Excel co hyperlink khong hop le: ' + $entry.FullName)
+                    }
+                }
+            }
+        }
     }
     finally { $archive.Dispose() }
     $expected = @($script:RequiredPackageParts) + @($Parts | ForEach-Object { [string]$_.Name })

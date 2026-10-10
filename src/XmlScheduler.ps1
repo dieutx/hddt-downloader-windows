@@ -26,6 +26,7 @@ $global:ProgressPreference = 'SilentlyContinue'
 . (Join-Path $Root 'src/BrowserProfile.ps1')
 . (Join-Path $Root 'src/XmlScheduler.ps1')
 Set-HddtSharedState -Shared $Shared
+Set-HddtRunContext -Context $Shared.RunContext
 $script:HddtLogForwardToShared = $true
 $script:HddtLogLevel = ([string]$LogLevel).ToUpperInvariant()
 $script:HddtLogToFile = $false
@@ -84,6 +85,7 @@ function New-HddtXmlSharedState {
     $shared = [hashtable]::Synchronized(@{
         SyncRoot = (New-Object object)
         StopRequested = $false
+        RunContext = $script:HddtRunContext
         Token = [string](Get-HddtConfigValue $Config 'Token' '')
         AuthRefreshCount = 0
         Results = (New-Object System.Collections.Generic.List[object])
@@ -386,6 +388,42 @@ function Get-GdtXmlDownloadResult {
     }
     catch {
         $watch.Stop()
+        $xmlFailure = [pscustomobject]@{
+            Endpoint = Get-GdtLastRequestUri
+            StatusCode = Get-GdtLastStatusCode
+            Attempts = Get-GdtLastRequestAttempts
+            RetryAfterSeconds = Get-GdtLastRetryAfterSeconds
+            ErrorMessage = $_.Exception.Message
+        }
+        if ($xmlFailure.StatusCode -eq 500 -and -not (Test-HddtStopRequested)) {
+            try {
+                $watch.Start()
+                Write-HddtLog INFO ('[API DETAIL] XML HTTP 500; lay chi tiet hoa don {0}.' -f $label)
+                $apiDetail = Get-GdtInvoiceDetail -Config $Config -Invoice $Invoice
+                $watch.Stop()
+                return [pscustomobject]@{
+                    PipelineIndex = $PipelineIndex; WorkerIndex = $WorkerIndex; WorkerCount = $WorkerCount
+                    Invoice = $Invoice; Label = $label; Success = $true; Stage = 'API detail'
+                    XmlFiles = @(); ApiDetail = $apiDetail; XmlFailure = $xmlFailure
+                    ResponseTimeMs = [int]$watch.ElapsedMilliseconds
+                    Endpoint = Get-GdtLastRequestUri; StatusCode = 200
+                    Attempts = Get-GdtLastRequestAttempts; RetryAfterSeconds = Get-GdtLastRetryAfterSeconds
+                    ErrorMessage = ''
+                }
+            }
+            catch {
+                $watch.Stop()
+                return [pscustomobject]@{
+                    PipelineIndex = $PipelineIndex; WorkerIndex = $WorkerIndex; WorkerCount = $WorkerCount
+                    Invoice = $Invoice; Label = $label; Success = $false; Stage = 'API detail'
+                    XmlFiles = @(); ApiDetail = $null; XmlFailure = $xmlFailure
+                    ResponseTimeMs = [int]$watch.ElapsedMilliseconds
+                    Endpoint = Get-GdtLastRequestUri; StatusCode = Get-GdtLastStatusCode
+                    Attempts = Get-GdtLastRequestAttempts; RetryAfterSeconds = Get-GdtLastRetryAfterSeconds
+                    ErrorMessage = ('XML HTTP 500; API detail that bai: {0}' -f $_.Exception.Message)
+                }
+            }
+        }
         return [pscustomobject]@{
             PipelineIndex = $PipelineIndex
             WorkerIndex = $WorkerIndex
@@ -396,11 +434,11 @@ function Get-GdtXmlDownloadResult {
             Stage = 'Tải XML'
             XmlFiles = @()
             ResponseTimeMs = [int]$watch.ElapsedMilliseconds
-            Endpoint = Get-GdtLastRequestUri
-            StatusCode = Get-GdtLastStatusCode
-            Attempts = Get-GdtLastRequestAttempts
-            RetryAfterSeconds = Get-GdtLastRetryAfterSeconds
-            ErrorMessage = $_.Exception.Message
+            Endpoint = $xmlFailure.Endpoint
+            StatusCode = $xmlFailure.StatusCode
+            Attempts = $xmlFailure.Attempts
+            RetryAfterSeconds = $xmlFailure.RetryAfterSeconds
+            ErrorMessage = $xmlFailure.ErrorMessage
         }
     }
 }

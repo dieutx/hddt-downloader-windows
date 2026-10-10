@@ -17,6 +17,59 @@ Công cụ PowerShell để tải **XML hóa đơn điện tử** từ GDT và x
 
 ## 1. Chạy nhanh trên Windows
 
+### App có giao diện — Windows 10 / Windows 11
+
+Tải [gói portable v1.0.0](https://github.com/dieutx/hddt-downloader-windows/releases/download/v1.0.0/HDDT-Downloader-v1.0.0-windows.zip),
+giải nén toàn bộ rồi chạy **`HDDT-Downloader.exe`**.
+Xem [các bản phát hành](https://github.com/dieutx/hddt-downloader-windows/releases)
+và [changelog](CHANGELOG.md).
+
+Có thể chạy giao diện WPF bằng cách nhấn đúp **`run-gui.cmd`**, hoặc:
+
+```powershell
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\Start-HddtGui.ps1
+```
+
+- Tab **Tải từ GDT**: nhập tài khoản, mật khẩu, khoảng ngày và chiều hóa đơn.
+- Tab **XML có sẵn → Excel**: chọn thư mục XML để chuyển sang Excel offline.
+- Chọn file Excel đầu ra, bấm **Bắt đầu**, theo dõi tiến độ và nhật ký.
+- **Dừng an toàn** chờ request hiện tại và xuất phần dữ liệu đã xử lý. Đóng cửa
+  sổ khi đang chạy cũng yêu cầu dừng an toàn trước khi thoát.
+- **Nạp cấu hình .env** dùng cấu hình có sẵn, gồm các tùy chọn nâng cao; không
+  sửa file `.env`. Mật khẩu nhập trên giao diện không ghi ra file tạm.
+- **Cài đặt nâng cao** cho phép chỉnh số kết nối XML ban đầu/tối đa, giãn cách
+  request, thời gian phục hồi sau 429, giãn cách API danh sách, retry, timeout,
+  số hóa đơn mỗi trang, tự điều tiết danh sách và ghi nhật ký. Có nút khôi phục
+  mặc định; tham số được kiểm tra trước khi áp dụng cho lần chạy tiếp theo.
+- Bật **Ghi nhớ cho lần mở app sau** để lưu các tham số này vào
+  `hddt-settings.json` cạnh app. File chỉ chứa tham số tải/nhật ký. Nếu không bật,
+  thay đổi chỉ dùng trong phiên hiện tại; muốn lưu thì thư mục app cần có quyền
+  ghi. Nạp `.env` sau đó sẽ ưu tiên giá trị trong `.env` cho phiên hiện tại.
+- Giao diện luôn từ chối ghi đè Excel đã có, kể cả khi `.env` đặt
+  `OVERWRITE_OUTPUT=true`. Tên đầu ra mặc định có thời điểm chạy.
+
+Giao diện dùng WPF/.NET Framework và Windows PowerShell 5.1 có sẵn trên Windows;
+không cần PowerShell 7 hoặc thư viện ngoài. Không cần cài Excel để tạo `.xlsx`.
+Giao diện chỉ dành cho Windows; các lệnh CLI bên dưới tiếp tục dùng được trên
+Windows, macOS và Linux.
+
+Để tạo app portable với launcher **`HDDT-Downloader.exe`**:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-WindowsApp.ps1
+```
+
+Script in đường dẫn app và ZIP trong `work/desktop/`. Giải nén toàn bộ ZIP vào
+thư mục có quyền ghi, rồi nhấn đúp `HDDT-Downloader.exe`. Giữ `.exe` cùng các
+file/thu mục đi kèm. Gói build chỉ chứa mã nguồn, không kèm `.env`, `output/`
+hoặc dữ liệu hóa đơn của người dùng. Mỗi lần build tạo một thư mục mới.
+
+Kiểm thử giao diện và luồng offline (không dùng tài khoản GDT):
+
+```powershell
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\tests\Run-DesktopTests.ps1
+```
+
 ### Bước 1 — Tải mã nguồn
 
 ```bat
@@ -181,6 +234,22 @@ Workbook gồm 8 sheet:
 
 File Excel không có VBA, `MENU` hay `Thamkhao`.
 
+Khi tải XML gặp HTTP 500, chương trình tự gọi `/api/query/invoices/detail`
+bằng token của phiên đăng nhập hiện tại. Nếu lấy được chi tiết, dữ liệu được
+ghi vào `TongHopHD_Mua`/`TongHopHD_Ban` và `ChiTietHD_Mua`/`ChiTietHD_Ban`.
+Các trường API trả `null` được giữ trống hoặc giữ giá trị đã có từ danh sách;
+không tự suy ra số lượng, đơn giá hay tạo XML thay thế. Hai sheet `_XML` chỉ
+chứa dữ liệu đọc từ XML thật.
+
+`BaoCao_LoiTaiHD` vẫn ghi nhận XML HTTP 500, nhưng kết quả cuối là
+`Da lay du lieu tu API detail` khi đã bổ sung dữ liệu thành công. Nếu API detail
+cũng lỗi, dòng tổng hợp từ danh sách vẫn được giữ cùng thông báo lỗi chi tiết.
+Không cần nhập token/cookie hoặc bật thêm tùy chọn.
+
+JSON được đọc từ byte UTF-8 gốc để giữ đúng tiếng Việt trên PowerShell 5.1;
+workbook dùng font Calibri. URL mẫu chưa ghép MST hoặc URL không hợp lệ trong
+`LinkTraCuu` được giữ dưới dạng chữ, chỉ URL HTTP/HTTPS hợp lệ mới có hyperlink.
+
 Sheet chi tiết `ChiTietHD_Mua`/`ChiTietHD_Ban` theo bố cục v6.7.4 của bản gốc: cột 1 là `Mẫu số hóa đơn`, tiếp theo là thông tin chung rồi tới từng dòng hàng hóa (34 cột). Mẫu số và MST người bán/mua được ghi dạng Text để giữ số `0` ở đầu.
 
 ### Link tra cứu hóa đơn
@@ -269,7 +338,7 @@ hành vi tuần tự cũ.
 
 ## 8. Lỗi và tạm dừng
 
-- Lỗi HTTP 500/504 hoặc lỗi parse được ghi vào `BaoCao_LoiTaiHD`; chương trình tiếp tục xử lý phần còn lại.
+- XML HTTP 500 được thử lấy dữ liệu bằng API detail; HTTP 504 và lỗi parse vẫn được ghi vào `BaoCao_LoiTaiHD`. Chương trình tiếp tục xử lý phần còn lại.
 - Nếu đăng nhập báo HTTP 401, CAPTCHA đã được đọc; hãy kiểm tra `GDT_USERNAME`, `GDT_PASSWORD`, quyền truy cập tài khoản và proxy trong `.env`.
 - Nhấn `Ctrl+C` một lần để dừng sau request hiện tại; dữ liệu đã tải vẫn được xuất Excel.
 - Nếu không lấy được hóa đơn nào, workbook lỗi vẫn được tạo và chương trình trả mã thoát `2`.

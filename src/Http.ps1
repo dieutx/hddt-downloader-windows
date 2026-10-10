@@ -38,6 +38,7 @@ function Set-HddtStopRequest {
 }
 
 function Test-HddtStopRequested {
+    if (Test-HddtRunStopRequested) { return $true }
     if ([bool]$script:HddtStopRequested) { return $true }
     return [bool](Get-HddtSharedValue -Key 'StopRequested' -Default $false)
 }
@@ -133,6 +134,7 @@ function Invoke-GdtTokenRefresh {
 }
 
 function Register-HddtStopHandler {
+    if ($null -ne $script:HddtRunContext) { return $false }
     try {
         $null = [Console]::add_CancelKeyPress({
             param($sender, $eventArgs)
@@ -279,6 +281,31 @@ function Add-HddtProxyParameters {
     Write-HddtLog DEBUG ('[MẠNG] Dùng proxy {0}:{1}.' -f $proxyUri.Host, $proxyUri.Port)
 }
 
+# JSON GDT dung UTF-8; doc byte goc de tranh mojibake tren PowerShell 5.1.
+function ConvertFrom-GdtResponseText {
+    param([Parameter(Mandatory = $true)]$Response)
+    $bytes = $null
+    $streamProperty = $Response.PSObject.Properties['RawContentStream']
+    if ($null -ne $streamProperty -and $null -ne $streamProperty.Value) {
+        $source = $streamProperty.Value
+        $originalPosition = 0
+        if ($source.CanSeek) { $originalPosition = $source.Position; $source.Position = 0 }
+        $memory = New-Object IO.MemoryStream
+        try { $source.CopyTo($memory); $bytes = $memory.ToArray() }
+        finally {
+            $memory.Dispose()
+            if ($source.CanSeek) { $source.Position = $originalPosition }
+        }
+    }
+    elseif ($Response.Content -is [byte[]]) { $bytes = [byte[]]$Response.Content }
+    if ($null -ne $bytes) {
+        $encoding = New-Object Text.UTF8Encoding($false, $true)
+        $text = $encoding.GetString($bytes)
+        return $text.TrimStart([char]0xFEFF)
+    }
+    return [string]$Response.Content
+}
+
 function Invoke-GdtRequest {
     [CmdletBinding()]
     param(
@@ -301,7 +328,7 @@ function Invoke-GdtRequest {
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $profileName = Resolve-GdtRequestProfile -Uri $Uri -RequestProfile $RequestProfile
-    $isXmlDownload = ($profileName -eq 'ExportXml') -and (Test-GdtXmlThrottleAvailable)
+    $isXmlDownload = ($profileName -in @('ExportXml', 'InvoiceDetail')) -and (Test-GdtXmlThrottleAvailable)
     $attempt = 0
     $rateLimitAttempts = 0
     Reset-GdtRequestContext
@@ -385,7 +412,7 @@ function Invoke-GdtRequest {
                 return ,$binaryContent
             }
             Write-HddtLog DEBUG ('HTTP {0} sau {1} ms.' -f [int]$response.StatusCode, $requestWatch.ElapsedMilliseconds)
-            return [string]$response.Content
+            return ConvertFrom-GdtResponseText -Response $response
         }
         catch {
             if ($slotHeld) {

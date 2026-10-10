@@ -313,6 +313,45 @@ function Get-GdtRelationHeaders {
     }
 }
 
+# Endpoint detail do nguoi dung xac minh tu request cua trang tra cuu GDT.
+# Dung token/proxy/retry cua phien hien tai, khong sao chep cookie tu curl.
+function Get-GdtInvoiceDetail {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]$Config,
+        [Parameter(Mandatory = $true)]$Invoice
+    )
+    foreach ($required in @('SellerTaxCode', 'InvoiceSeries', 'InvoiceNumber', 'InvoiceTemplate')) {
+        if ([string]::IsNullOrWhiteSpace([string](Get-ObjectValue $Invoice $required ''))) {
+            throw ('Thieu truong bat buoc {0} de lay API detail.' -f $required)
+        }
+    }
+    $query = 'nbmst={0}&khhdon={1}&shdon={2}&khmshdon={3}' -f `
+        (ConvertTo-QueryValue $Invoice.SellerTaxCode), (ConvertTo-QueryValue $Invoice.InvoiceSeries), `
+        (ConvertTo-QueryValue $Invoice.InvoiceNumber), (ConvertTo-QueryValue $Invoice.InvoiceTemplate)
+    $uri = '{0}/query/invoices/detail?{1}' -f $Config.BaseUrl, $query
+    $directionText = if ($Invoice.Direction -eq 'sold') { 'b%C3%A1n%20ra' } else { 'mua%20v%C3%A0o' }
+    $headers = @{
+        Accept = 'application/json, text/plain, */*'
+        'Accept-Language' = 'vi'
+        Action = ('Xem%20h%C3%B3a%20%C4%91%C6%A1n%20(h%C3%B3a%20%C4%91%C6%A1n%20{0})' -f $directionText)
+        'End-Point' = '/tra-cuu/tra-cuu-hoa-don'
+    }
+    $text = Invoke-GdtRequest -Config $Config -Uri $uri -RequestProfile 'InvoiceDetail' -ExtraHeaders $headers
+    try { $detail = $text | ConvertFrom-Json }
+    catch { throw 'Phan hoi API detail khong phai JSON hop le.' }
+    if ($null -eq $detail -or $detail -is [array] -or $null -eq $detail.PSObject.Properties['hdhhdvu']) {
+        throw 'Phan hoi API detail thieu du lieu hoa don.'
+    }
+    $identityFields = @(@('nbmst', 'SellerTaxCode'), @('khhdon', 'InvoiceSeries'), @('shdon', 'InvoiceNumber'), @('khmshdon', 'InvoiceTemplate'))
+    foreach ($field in $identityFields) {
+        if ((Get-JsonTextValue $detail $field[0]) -cne ([string](Get-ObjectValue $Invoice $field[1] ''))) {
+            throw 'Phan hoi API detail khong khop khoa hoa don dang tai.'
+        }
+    }
+    return $detail
+}
+
 # Thông báo lỗi ngay tại cột kết quả khi đã hết lượt thử,
 # tương ứng WriteRelationRequestError trong VBA.
 function Get-GdtRelationErrorText {

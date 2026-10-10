@@ -1,7 +1,9 @@
 ﻿[CmdletBinding()]
 param(
     [string]$EnvFile,
-    [switch]$Interactive
+    [switch]$Interactive,
+    [hashtable]$Values,
+    [hashtable]$RunContext
 )
 
 Set-StrictMode -Version 2.0
@@ -14,10 +16,13 @@ if ([string]::IsNullOrWhiteSpace($EnvFile)) { $EnvFile = Join-Path $PSScriptRoot
 . (Join-Path $PSScriptRoot 'src\Http.ps1')
 . (Join-Path $PSScriptRoot 'src\InvoiceApi.ps1')
 . (Join-Path $PSScriptRoot 'src\XmlParser.ps1')
+. (Join-Path $PSScriptRoot 'src/InvoiceDetail.ps1')
 . (Join-Path $PSScriptRoot 'src\ExcelExporter.ps1')
 . (Join-Path $PSScriptRoot 'src\Login.ps1')
 . (Join-Path $PSScriptRoot 'src\BrowserProfile.ps1')
 . (Join-Path $PSScriptRoot 'src\XmlScheduler.ps1')
+
+Set-HddtRunContext -Context $RunContext
 
 function Set-HddtObjectValue {
     param($Object, [string]$Name, $Value)
@@ -108,6 +113,22 @@ function Add-HddtXmlResultRows {
     $detailAdded = 0
     $stage = 'Tải XML'
     try {
+        $apiDetail = Get-ObjectValue $Result 'ApiDetail' $null
+        if ($null -ne $apiDetail) {
+            $stage = 'Parse API detail'
+            $raw = Merge-GdtInvoiceData -Index (Get-ObjectValue $Binding.Summary 'GdtIndex' $null) -Detail $apiDetail
+            $parsed = ConvertFrom-GdtInvoiceDetail -Detail $raw -Direction $Binding.Invoice.Direction
+            Set-HddtObjectValue $Binding.Summary 'GdtIndex' $raw
+            Merge-HddtParsedSummary -Target $Binding.Summary -Parsed $parsed.Summary
+            foreach ($row in $parsed.Details) { $Binding.Details.Add($row); $detailAdded++ }
+            $failure = $Result.XmlFailure
+            $Binding.DownloadError = New-HddtDownloadErrorRow -Invoice $Binding.Invoice -Stage 'Tai XML' `
+                -Endpoint $failure.Endpoint -StatusCode $failure.StatusCode -Attempts $failure.Attempts `
+                -ErrorText $failure.ErrorMessage -FinalResult 'Da lay du lieu tu API detail'
+            $Binding.DownloadError.Note = 'Khong co XML goc; du lieu API detail da ghi vao sheet tong hop va chi tiet.'
+            Write-HddtLog INFO ('[API DETAIL] {0} | +{1} dong chi tiet | khong co XML goc.' -f $Result.Label, $detailAdded)
+            return $detailAdded
+        }
         $firstXml = $true
         foreach ($xmlFile in @($Result.XmlFiles)) {
             $stage = 'Parse XML'
@@ -169,7 +190,9 @@ if (Register-HddtStopHandler) {
 }
 
 try {
-    $config = Get-HddtConfig -EnvFile $EnvFile -RepositoryRoot $PSScriptRoot -Interactive:$Interactive
+    $configParameters = @{ EnvFile = $EnvFile; RepositoryRoot = $PSScriptRoot; Interactive = $Interactive }
+    if ($PSBoundParameters.ContainsKey('Values')) { $configParameters['Values'] = $Values }
+    $config = Get-HddtConfig @configParameters
     New-Item -ItemType Directory -Path $config.OutputDirectory -Force | Out-Null
     New-Item -ItemType Directory -Path $config.XmlDirectory -Force | Out-Null
     foreach ($direction in $config.Directions) {

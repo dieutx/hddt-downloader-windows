@@ -72,6 +72,7 @@ function Resolve-GdtRequestProfile {
     if ($Uri -match '/security-taxpayer/authenticate') { return 'Login' }
     if ($Uri -match '/captcha') { return 'Captcha' }
     if ($Uri -match '/invoices/export-xml') { return 'ExportXml' }
+    if ($Uri -match '/invoices/detail(?:\?|$)') { return 'InvoiceDetail' }
     if ($Uri -match '/invoices/(relative|related)') { return 'InvoiceRelation' }
     return 'InvoiceQuery'
 }
@@ -109,7 +110,7 @@ function Get-GdtRequestHeaders {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet('Captcha', 'Login', 'InvoiceQuery', 'InvoiceRelation', 'ExportXml')]
+        [ValidateSet('Captcha', 'Login', 'InvoiceQuery', 'InvoiceRelation', 'InvoiceDetail', 'ExportXml')]
         [string]$RequestProfile,
         $Config,
         $BrowserProfile,
@@ -147,6 +148,10 @@ function Get-GdtRequestHeaders {
             $headers['Referer'] = [string]$BrowserProfile.LookupReferer
         }
         'InvoiceRelation' {
+            $headers['Accept'] = 'application/json, text/plain, */*'
+            $headers['Referer'] = [string]$BrowserProfile.LookupReferer
+        }
+        'InvoiceDetail' {
             $headers['Accept'] = 'application/json, text/plain, */*'
             $headers['Referer'] = [string]$BrowserProfile.LookupReferer
         }

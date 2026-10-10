@@ -13,6 +13,17 @@ $script:HddtSharedState = $null
 # Khi bật, worker chỉ đẩy log vào shared.LogQueue; main thread là nơi duy nhất
 # ghi ra console/file để log không bị đan xen giữa các runspace.
 $script:HddtLogForwardToShared = $false
+$script:HddtRunContext = $null
+
+# UI truyen co dung trong bo nho; CLI khong can tao context.
+function Set-HddtRunContext {
+    param([hashtable]$Context)
+    $script:HddtRunContext = $Context
+}
+
+function Test-HddtRunStopRequested {
+    return ($null -ne $script:HddtRunContext -and [bool]$script:HddtRunContext['StopRequested'])
+}
 
 function Set-HddtSharedState {
     param($Shared)
