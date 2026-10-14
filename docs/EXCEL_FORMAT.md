@@ -75,7 +75,7 @@ Cùng bố cục nhưng `Ngày lập hóa đơn` và `Thuế suất` giữ **d�
 và sheet `ChiTietHD_Ban_XML` giữ `NBan`/`NMua` đúng theo tên node trong XML (không
 đảo nhãn).
 
-Dữ liệu lấy từ API detail sau XML HTTP 500 chỉ ghi vào sheet tổng hợp và chi
+Dữ liệu lấy từ API detail sau XML HTTP 500/504 chỉ ghi vào sheet tổng hợp và chi
 tiết (1, 2, 4, 5); không ghi vào hai sheet XML (3, 6). Trường API thiếu hoặc
 null giữ trống nếu danh sách chưa có giá trị; số lượng/đơn giá không suy diễn.
 
@@ -88,8 +88,8 @@ status, nội dung lỗi, số lần đã thử, `Retry-After`, kết quả cu�
 Nội dung lỗi đã redact qua `Protect-ExcelErrorText` (bỏ userinfo trong URL, `Bearer`,
 `Authorization`, mật khẩu/proxy). Có `autoFilter`.
 
-Nếu XML HTTP 500 được bổ sung dữ liệu bằng API detail, dòng báo cáo vẫn giữ
-HTTP 500 và lỗi XML gốc; cột kết quả cuối ghi `Da lay du lieu tu API detail`,
+Nếu XML HTTP 500/504 được bổ sung dữ liệu bằng API detail, dòng báo cáo vẫn giữ
+HTTP status 500/504 và lỗi XML gốc; cột kết quả cuối ghi `Da lay du lieu tu API detail`,
 cột ghi chú cho biết dữ liệu đã ghi vào tổng hợp/chi tiết và không có XML gốc.
 
 ## Sheet `LinkTraCuu` (8)

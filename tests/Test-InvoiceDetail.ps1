@@ -105,6 +105,27 @@ try {
     Assert-Equal 'Bearer current-synthetic-session' $script:DetailTransportHeaders.Authorization 'Fallback uses the current session token'
     Assert-Equal 1 (Get-GdtXmlThrottleSnapshot).RateLimitCount 'Detail 429 uses the shared scheduler'
     Assert-Equal 0 (Get-GdtXmlThrottleSnapshot).ActiveCount 'Detail fallback releases every scheduler slot'
+    $script:DetailTransportHits = 0
+    $detailTransportConfig.MaxRetries = 1
+    $original504Wait = ${function:Wait-HddtRetryDelay}
+    Set-Item Function:\Wait-HddtRetryDelay -Value { param($Seconds) }
+    Set-Item Function:\Invoke-WebRequest -Value {
+        param($Uri, $Method, $Headers, $TimeoutSec, $UseBasicParsing, $WebSession, $ErrorAction, $Body, $ContentType)
+        $script:DetailTransportHits++
+        if ($Uri -like '*export-xml?*') {
+            $response = New-Object HddtTest.FakeWebResponse (504)
+            throw (New-Object Net.WebException('Synthetic HTTP 504', $null, [Net.WebExceptionStatus]::ProtocolError, $response))
+        }
+        return [pscustomobject]@{ StatusCode = 200; Content = $script:DetailTransportBytes }
+    }
+    try {
+        $timeoutResult = Get-GdtXmlDownloadResult $detailTransportConfig $detailInvoice 0
+        Assert-Equal $true $timeoutResult.Success 'Real XML 504 transport falls back after retry exhaustion'
+        Assert-Equal 3 $script:DetailTransportHits 'XML 504 tries twice then calls detail once'
+        Assert-Equal 2 $timeoutResult.XmlFailure.Attempts 'XML 504 recovery preserves exhausted retry count'
+        Assert-Equal 504 $timeoutResult.XmlFailure.StatusCode 'XML 504 recovery preserves original status'
+    }
+    finally { Set-Item Function:\Wait-HddtRetryDelay -Value $original504Wait }
 }
 finally {
     if ($null -ne $originalDetailWebRequest) { Set-Item Function:\Invoke-WebRequest -Value $originalDetailWebRequest }
@@ -146,10 +167,14 @@ try {
     Assert-Equal 500 $fallbackResult.XmlFailure.StatusCode 'Recovery keeps the original XML failure metadata'
     Assert-Equal 0 @($fallbackResult.XmlFiles).Count 'Recovery never invents an XML file'
     $script:DetailXmlStatus = 504
+    $timeoutFallback = Get-GdtXmlDownloadResult $detailConfig $detailInvoice 0
+    Assert-Equal $true $timeoutFallback.Success 'XML 504 is recovered with API detail after XML retries'
+    Assert-Equal 504 $timeoutFallback.XmlFailure.StatusCode 'Timeout recovery retains XML 504 metadata'
+    $script:DetailXmlStatus = 502
     Assert-Equal $false (Get-GdtXmlDownloadResult $detailConfig $detailInvoice 0).Success 'Other HTTP errors retain the existing failure behavior'
     $script:DetailXmlStatus = 200
     Assert-Equal $true (Get-GdtXmlDownloadResult $detailConfig $detailInvoice 0).Success 'Normal XML download remains successful'
-    Assert-Equal 1 $script:DetailFallbackHits 'Other errors and normal XML never request detail'
+    Assert-Equal 2 $script:DetailFallbackHits 'Other errors and normal XML never request detail'
     $script:DetailXmlStatus = 500
     $script:DetailFallbackFails = $true
     $failedDetailResult = Get-GdtXmlDownloadResult $detailConfig $detailInvoice 0
@@ -158,7 +183,7 @@ try {
     Assert-Equal $true ($failedDetailResult.ErrorMessage -like '*Synthetic detail failure*') 'Detail failure includes the fallback reason'
     Set-HddtStopRequest
     $null = Get-GdtXmlDownloadResult $detailConfig $detailInvoice 0
-    Assert-Equal 2 $script:DetailFallbackHits 'Stop request prevents a new fallback request'
+    Assert-Equal 3 $script:DetailFallbackHits 'Stop request prevents a new fallback request'
 }
 finally {
     Set-Item Function:\Save-GdtInvoiceXml -Value $originalDetailSaveXml

@@ -234,14 +234,14 @@ Workbook gồm 8 sheet:
 
 File Excel không có VBA, `MENU` hay `Thamkhao`.
 
-Khi tải XML gặp HTTP 500, chương trình tự gọi `/api/query/invoices/detail`
+Khi tải XML gặp HTTP 500 hoặc đã hết lượt retry HTTP 504, chương trình tự gọi `/api/query/invoices/detail`
 bằng token của phiên đăng nhập hiện tại. Nếu lấy được chi tiết, dữ liệu được
 ghi vào `TongHopHD_Mua`/`TongHopHD_Ban` và `ChiTietHD_Mua`/`ChiTietHD_Ban`.
 Các trường API trả `null` được giữ trống hoặc giữ giá trị đã có từ danh sách;
 không tự suy ra số lượng, đơn giá hay tạo XML thay thế. Hai sheet `_XML` chỉ
 chứa dữ liệu đọc từ XML thật.
 
-`BaoCao_LoiTaiHD` vẫn ghi nhận XML HTTP 500, nhưng kết quả cuối là
+`BaoCao_LoiTaiHD` vẫn ghi nhận XML HTTP 500/504, nhưng kết quả cuối là
 `Da lay du lieu tu API detail` khi đã bổ sung dữ liệu thành công. Nếu API detail
 cũng lỗi, dòng tổng hợp từ danh sách vẫn được giữ cùng thông báo lỗi chi tiết.
 Không cần nhập token/cookie hoặc bật thêm tùy chọn.
@@ -338,7 +338,7 @@ hành vi tuần tự cũ.
 
 ## 8. Lỗi và tạm dừng
 
-- XML HTTP 500 được thử lấy dữ liệu bằng API detail; HTTP 504 và lỗi parse vẫn được ghi vào `BaoCao_LoiTaiHD`. Chương trình tiếp tục xử lý phần còn lại.
+- XML HTTP 500/504 được thử lấy dữ liệu bằng API detail; các lỗi HTTP khác và lỗi parse vẫn được ghi vào `BaoCao_LoiTaiHD`. Chương trình tiếp tục xử lý phần còn lại.
 - Nếu đăng nhập báo HTTP 401, CAPTCHA đã được đọc; hãy kiểm tra `GDT_USERNAME`, `GDT_PASSWORD`, quyền truy cập tài khoản và proxy trong `.env`.
 - Trong lúc chờ retry/giãn cách, cờ Dừng được kiểm tra mỗi tối đa 250 ms; request đang chạy vẫn chờ theo timeout đã cấu hình.
 - Nhấn `Ctrl+C` một lần để dừng sau request hiện tại; dữ liệu đã tải vẫn được xuất Excel.

@@ -33,7 +33,7 @@ xuất Excel chỉ cần làm trong `src/ExcelExporter.ps1` và
 | `Login.ps1` | Đọc CAPTCHA SVG, giải mã thành ký tự, đăng nhập, trả token | Token chỉ trong bộ nhớ |
 | `InvoiceApi.ps1` | Danh sách hóa đơn (phân trang theo `state`), tải ZIP XML, chuỗi hóa đơn liên quan | Giữ nguyên item JSON gốc trong `GdtIndex` |
 | `XmlParser.ps1` | XML hóa đơn → `Summary` + `Details` | Đọc `local-name()` nên không phụ thuộc namespace |
-| `InvoiceDetail.ps1` | JSON chi tiết → `Summary` + `Details` khi XML HTTP 500 | Giữ giá trị danh sách nếu detail trả null/rỗng; đánh dấu nguồn `api-detail` |
+| `InvoiceDetail.ps1` | JSON chi tiết → `Summary` + `Details` khi XML HTTP 500/504 | Giữ giá trị danh sách nếu detail trả null/rỗng; đánh dấu nguồn `api-detail` |
 | `LinkTraCuu.ps1` | Bảng tra cứu, tên trường mã tra cứu, nhãn `tthai`/`ttxly`, nạp bảng của người dùng | Nguồn dữ liệu tham chiếu duy nhất |
 | `ExcelExporter.ps1` | Dựng workbook `.xlsx` data-only, đóng gói OPC, kiểm tra gói | Không dùng thư viện ngoài |
 
@@ -109,7 +109,7 @@ tổng hợp đã tạo từ danh sách, nhưng **không** ghi đè các trườ
 (`GdtIndex`, `Status`, `RelatedChain`, …). Nhờ vậy hóa đơn tải XML lỗi vẫn còn
 trong tổng hợp kèm dòng lỗi.
 
-Khi request xuất XML nhận HTTP 500, worker gọi `Get-GdtInvoiceDetail` tại
+Khi request xuất XML nhận HTTP 500/504, worker gọi `Get-GdtInvoiceDetail` tại
 `/api/query/invoices/detail` với khóa `nbmst`, `khhdon`, `shdon`, `khmshdon`
 của hóa đơn đang tải. Endpoint này dùng profile `InvoiceDetail`, Action mua/bán
 tương ứng, token hiện hành và cùng bộ điều tiết XML (kể cả retry 429).
