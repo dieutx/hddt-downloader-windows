@@ -204,3 +204,9 @@ pwsh -NoProfile -File tests/Run-Tests.ps1
 Test mở lại file `.xlsx` vừa xuất và kiểm tra: đủ part bắt buộc, không entry nào
 giữ dấu `\`, quan hệ gốc trỏ đúng `xl/workbook.xml`, số sheet, thứ tự tên sheet,
 quan hệ hyperlink, và thứ tự phần tử `font` theo schema.
+
+Các lỗi parse XML local khác đường dẫn giữ thành các dòng báo cáo riêng.
+Khóa nhóm chi tiết gồm cả MST người bán và mẫu số để tránh trộn hóa đơn
+API detail cùng ký hiệu/số. Thuế suất thiếu giữ trống, khác thuế suất 0%.
+Khi không cho phép ghi đè, file đích xuất hiện trong lúc export cũng được giữ
+nguyên; bước cuối chỉ đổi tên sang đích chưa tồn tại.

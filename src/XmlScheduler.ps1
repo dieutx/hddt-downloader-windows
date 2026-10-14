@@ -84,6 +84,7 @@ function New-HddtXmlSharedState {
 
     $shared = [hashtable]::Synchronized(@{
         SyncRoot = (New-Object object)
+        AuthSyncRoot = (New-Object object)
         StopRequested = $false
         RunContext = $script:HddtRunContext
         Token = [string](Get-HddtConfigValue $Config 'Token' '')
@@ -230,7 +231,7 @@ function Register-GdtXmlRateLimit {
         }
 
         $oldInterval = [int]$shared.XmlCurrentIntervalMs
-        $newInterval = [Math]::Min(5000, [Math]::Max([int]$shared.XmlBaseIntervalMs, [int][Math]::Floor($oldInterval * 1.5)))
+        $newInterval = [Math]::Max([int]$shared.XmlBaseIntervalMs, [Math]::Min(5000, [int][Math]::Floor($oldInterval * 1.5)))
         $shared.XmlCurrentIntervalMs = $newInterval
 
         $shared.XmlLastRateLimitUtc = [datetime]::UtcNow

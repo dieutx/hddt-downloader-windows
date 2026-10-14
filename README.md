@@ -340,6 +340,7 @@ hành vi tuần tự cũ.
 
 - XML HTTP 500 được thử lấy dữ liệu bằng API detail; HTTP 504 và lỗi parse vẫn được ghi vào `BaoCao_LoiTaiHD`. Chương trình tiếp tục xử lý phần còn lại.
 - Nếu đăng nhập báo HTTP 401, CAPTCHA đã được đọc; hãy kiểm tra `GDT_USERNAME`, `GDT_PASSWORD`, quyền truy cập tài khoản và proxy trong `.env`.
+- Trong lúc chờ retry/giãn cách, cờ Dừng được kiểm tra mỗi tối đa 250 ms; request đang chạy vẫn chờ theo timeout đã cấu hình.
 - Nhấn `Ctrl+C` một lần để dừng sau request hiện tại; dữ liệu đã tải vẫn được xuất Excel.
 - Nếu không lấy được hóa đơn nào, workbook lỗi vẫn được tạo và chương trình trả mã thoát `2`.
 
@@ -391,3 +392,5 @@ git push -u origin fix/ten-rang-nho
 ```
 
 Logic gốc của bản Excel add-in: [dieutx/TaiHoaDonDienTu](https://github.com/dieutx/TaiHoaDonDienTu).
+
+Review logic/runtime và đề xuất nâng cấp: [docs/REVIEW_2026-10-14.md](docs/REVIEW_2026-10-14.md).

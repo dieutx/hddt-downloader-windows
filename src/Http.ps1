@@ -106,7 +106,13 @@ function Invoke-GdtTokenRefresh {
     }
 
     $deadline = [datetime]::UtcNow.AddSeconds($TimeoutSeconds)
-    if ([Threading.Monitor]::TryEnter($shared.SyncRoot, 0)) {
+    # Khoa dang nhap tach rieng de main thread van nhan log/ket qua va gui co dung.
+    while ([datetime]::UtcNow -lt $deadline) {
+        if (Test-HddtStopRequested) { throw 'Da dung theo yeu cau; khong cho lam moi token.' }
+        if (-not [Threading.Monitor]::TryEnter($shared.AuthSyncRoot, 0)) {
+            Start-Sleep -Milliseconds 250
+            continue
+        }
         try {
             $current = [string](Get-HddtSharedValue -Key 'Token' -Default '')
             if (-not [string]::IsNullOrWhiteSpace($current) -and $current -ne $FailedToken) {
@@ -120,17 +126,9 @@ function Invoke-GdtTokenRefresh {
             Set-HddtSharedValue -Key 'Token' -Value $newToken
             return $newToken
         }
-        finally { [Threading.Monitor]::Exit($shared.SyncRoot) }
+        finally { [Threading.Monitor]::Exit($shared.AuthSyncRoot) }
     }
-
-    # Đang có luồng khác làm mới: chờ token đổi, không gọi CAPTCHA lần nữa.
-    while ([datetime]::UtcNow -lt $deadline) {
-        if (Test-HddtStopRequested) { throw 'Đã dừng theo yêu cầu; không chờ làm mới token.' }
-        $current = [string](Get-HddtSharedValue -Key 'Token' -Default '')
-        if (-not [string]::IsNullOrWhiteSpace($current) -and $current -ne $FailedToken) { return $current }
-        Start-Sleep -Milliseconds 250
-    }
-    throw 'Hết thời gian chờ làm mới token phiên (180s).'
+    throw ('Het thoi gian cho lam moi token phien ({0}s).' -f $TimeoutSeconds)
 }
 
 function Register-HddtStopHandler {
@@ -177,7 +175,7 @@ function Register-GdtRateLimit {
     param([Parameter(Mandatory = $true)]$Config)
     if (-not (Test-AdaptiveThrottleEnabled $Config)) { return }
     $currentDelay = Get-GdtRequestDelayMs $Config
-    $script:AdaptiveRequestDelayMs = [Math]::Min(10000, [Math]::Max(1000, $currentDelay * 2))
+    $script:AdaptiveRequestDelayMs = [Math]::Max([int]$Config.RequestDelayMs, [Math]::Min(10000, [Math]::Max(1000, $currentDelay * 2)))
     $script:SuccessfulRequestStreak = 0
     Write-HddtLog WARN ('[MẠNG] GDT giới hạn tốc độ; tự tăng giãn cách lên {0} ms/request.' -f $script:AdaptiveRequestDelayMs)
 }
@@ -259,8 +257,26 @@ function Wait-GdtRequestSlot {
     $remainingMs = [int][Math]::Ceiling($requestDelayMs - $elapsedMs)
     if ($remainingMs -gt 0) {
         Write-HddtLog DEBUG ('Giãn cách request: chờ {0} ms.' -f $remainingMs)
-        Start-Sleep -Milliseconds $remainingMs
+        Wait-HddtRequestDelay -Milliseconds $remainingMs
     }
+}
+
+# Khong chan nut Dung trong backoff/Retry-After; request dang chay van duoc cho.
+function Wait-HddtRequestDelay {
+    param([long]$Milliseconds)
+    $remaining = $Milliseconds
+    while ($remaining -gt 0) {
+        if (Test-HddtStopRequested) { throw 'Da dung theo yeu cau; ngung cho request.' }
+        $chunk = [int][Math]::Min(250, $remaining)
+        Start-Sleep -Milliseconds $chunk
+        $remaining -= $chunk
+    }
+    if (Test-HddtStopRequested) { throw 'Da dung theo yeu cau; khong gui request moi.' }
+}
+
+function Wait-HddtRetryDelay {
+    param([int]$Seconds)
+    Wait-HddtRequestDelay -Milliseconds ([long]$Seconds * 1000)
 }
 
 function Add-HddtProxyParameters {
@@ -330,6 +346,7 @@ function Invoke-GdtRequest {
     $profileName = Resolve-GdtRequestProfile -Uri $Uri -RequestProfile $RequestProfile
     $isXmlDownload = ($profileName -in @('ExportXml', 'InvoiceDetail')) -and (Test-GdtXmlThrottleAvailable)
     $attempt = 0
+    $requestAttempts = 0
     $rateLimitAttempts = 0
     Reset-GdtRequestContext
     $script:LastGdtRequestUri = [string]$Uri
@@ -348,7 +365,8 @@ function Invoke-GdtRequest {
                 Wait-GdtRequestSlot -Config $Config
             }
             $script:LastGdtRequestUtc = [datetime]::UtcNow
-            $script:LastGdtRequestAttempts = $attempt + 1
+            $requestAttempts++
+            $script:LastGdtRequestAttempts = $requestAttempts
             $requestWatch = [Diagnostics.Stopwatch]::StartNew()
             $authorizationToken = ''
             if (-not $SkipAuthorization) { $authorizationToken = Get-GdtAuthToken -Config $Config }
@@ -380,6 +398,8 @@ function Invoke-GdtRequest {
             }
             Write-HddtLog DEBUG ('HTTP {0} {1}' -f $Method.ToUpperInvariant(), $Uri)
             $response = Invoke-WebRequest @parameters
+            $script:LastGdtRequestUri = [string]$Uri
+            $script:LastGdtStatusCode = [int]$response.StatusCode
             $requestWatch.Stop()
             if ($isXmlDownload) {
                 Exit-GdtXmlRequestSlot -ResponseTimeMs ([int]$requestWatch.ElapsedMilliseconds)
@@ -439,7 +459,6 @@ function Invoke-GdtRequest {
                 # không lặp vô hạn khi token mới vẫn bị từ chối, và các luồng
                 # tải song song dùng chung một lần đăng nhập (single-flight).
                 $attempt++
-                $script:LastGdtRequestAttempts = $attempt
                 if ($attempt -gt $Config.MaxRetries) {
                     throw ('Phiên đăng nhập không hợp lệ (HTTP {0}) sau {1} lần làm mới token.' -f $status, $Config.MaxRetries)
                 }
@@ -450,6 +469,12 @@ function Invoke-GdtRequest {
                 }
                 catch {
                     throw "Tự đăng nhập lại sau HTTP $status thất bại: $($_.Exception.Message)"
+                }
+                finally {
+                    # CAPTCHA/login co context rieng; khoi phuc request dang retry.
+                    $script:LastGdtRequestUri = [string]$Uri
+                    $script:LastGdtRequestAttempts = $requestAttempts
+                    $script:LastGdtStatusCode = $status
                 }
                 continue
             }
@@ -480,7 +505,7 @@ function Invoke-GdtRequest {
                 $waitSeconds = Get-RetryDelaySeconds -StatusCode 429 -Attempt $rateLimitAttempts -RetryAfterSeconds $retryAfterSeconds
                 Write-HddtLog WARN ("[MẠNG] HTTP 429; thử lại {0}/{1} sau {2}s (độc lập MAX_RETRIES)." -f $rateLimitAttempts, (Get-429RetryLimit), $waitSeconds)
                 if (Test-HddtStopRequested) { throw 'Đã dừng theo yêu cầu; ngưng thử lại.' }
-                Start-Sleep -Seconds $waitSeconds
+                Wait-HddtRetryDelay -Seconds $waitSeconds
                 continue
             }
 
@@ -494,7 +519,7 @@ function Invoke-GdtRequest {
             $waitSeconds = Get-RetryDelaySeconds -StatusCode $status -Attempt $attempt
             Write-HddtLog WARN ("[MẠNG] HTTP {0}; thử lại {1}/{2} sau {3}s." -f $status, $attempt, $Config.MaxRetries, $waitSeconds)
             if (Test-HddtStopRequested) { throw 'Đã dừng theo yêu cầu; ngưng thử lại.' }
-            Start-Sleep -Seconds $waitSeconds
+            Wait-HddtRetryDelay -Seconds $waitSeconds
         }
     }
 }
