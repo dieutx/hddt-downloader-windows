@@ -70,6 +70,7 @@ foreach ($case in $cases) {
             Assert-Layout ($ancestor -isnot [Windows.Controls.ScrollViewer]) 'Progress is not inside a page ScrollViewer'
             $ancestor = [Windows.Media.VisualTreeHelper]::GetParent($ancestor)
         }
+        Assert-Layout ($script:GuiControls.ActivityLog.Columns[2].ActualWidth -ge $script:GuiControls.ActivityLog.ActualWidth - 184) ($case.Name + ' message column uses available width')
         Assert-Layout ($script:GuiRecentLimit -ge 4 -and $script:GuiRecentLimit -le 6) ($case.Name + ' four to six recent log rows fit')
         $results.Add([pscustomobject]@{ Size = $case.Name; State = $state; RecentRows = $script:GuiRecentLimit; FullPageScroll = $false })
     }
