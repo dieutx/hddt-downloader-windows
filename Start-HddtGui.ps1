@@ -44,12 +44,34 @@ $script:GuiLogHistory = New-Object Text.StringBuilder
 $script:GuiLogDialog = $null
 $script:GuiUpdateLastError = ''
 $script:GuiPasswordSync = $false
+$script:GuiWindowIcon = $null
+
+function Get-HddtGuiWindowIcon {
+    # XAML duoc nap bang XmlReader nen khong the dat Icon="..." tuong doi;
+    # nap icon cua app truc tiep tu file de title bar/taskbar dung dung bieu tuong.
+    if ($null -ne $script:GuiWindowIcon) { return $script:GuiWindowIcon }
+    $path = Join-Path $script:GuiRoot 'ui/hddt.ico'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    try {
+        $decoder = [Windows.Media.Imaging.BitmapDecoder]::Create((New-Object Uri($path, [UriKind]::Absolute)),
+            [Windows.Media.Imaging.BitmapCreateOptions]::None, [Windows.Media.Imaging.BitmapCacheOption]::OnLoad)
+        $best = $null
+        foreach ($frame in $decoder.Frames) {
+            if ($null -eq $best -or $frame.PixelWidth -gt $best.PixelWidth) { $best = $frame }
+        }
+        if ($null -ne $best) { $best.Freeze(); $script:GuiWindowIcon = $best }
+    }
+    catch { $script:GuiWindowIcon = $null }
+    return $script:GuiWindowIcon
+}
+
 $reader = New-Object IO.StringReader([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'ui/MainWindow.xaml'), [Text.Encoding]::UTF8))
 $xmlReader = [Xml.XmlReader]::Create($reader)
 try { $script:GuiWindow = [Windows.Markup.XamlReader]::Load($xmlReader) }
 finally { $xmlReader.Dispose(); $reader.Dispose() }
 $script:GuiWindow.Height = [Math]::Min(768, [Math]::Max(560, [Windows.SystemParameters]::WorkArea.Height - 16))
 $script:GuiWindow.Width = [Math]::Min(1160, [Math]::Max(880, [Windows.SystemParameters]::WorkArea.Width - 16))
+$script:GuiWindow.Icon = Get-HddtGuiWindowIcon
 foreach ($name in @('LoadConfig', 'AdvancedSettings', 'ModeTabs', 'Username', 'Password', 'FromDate', 'ToDate', 'Direction',
     'IncludeRegular', 'IncludeSco', 'ProxyUrl', 'ProxyUsername', 'ProxyPassword', 'FetchRelated', 'RedownloadXml',
     'BrowseXml', 'XmlDirectory', 'LocalDirection', 'OutputPath', 'BrowseOutput', 'StartRun', 'StopRun',
@@ -450,6 +472,7 @@ function New-HddtGuiSettingsDialog {
     finally { $xmlReader.Dispose(); $reader.Dispose() }
     $window.Height = [Math]::Min(750, [Windows.SystemParameters]::WorkArea.Height - 32)
     $window.Width = [Math]::Min(720, [Windows.SystemParameters]::WorkArea.Width - 32)
+    $window.Icon = Get-HddtGuiWindowIcon
     $controls = @{}
     $names = @('RememberSettings', 'SettingsError', 'ResetSettings', 'CancelSettings', 'ApplySettings')
     $names += @(Get-HddtDesktopSettingFields | ForEach-Object { $_.Key })

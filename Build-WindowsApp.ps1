@@ -1,5 +1,6 @@
 [CmdletBinding()]
-param([string]$OutputDirectory, [switch]$FolderBundle)
+param([string]$OutputDirectory, [switch]$FolderBundle, [string]$SignCertificateThumbprint,
+    [string]$TimestampUrl = 'http://timestamp.digicert.com')
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
@@ -20,7 +21,7 @@ $parts = @('Start-HddtGui.ps1', 'Invoke-Hddt.ps1', 'Parse-LocalXml.ps1', 'README
     'src/Logging.ps1', 'src/Config.ps1', 'src/Http.ps1', 'src/InvoiceApi.ps1', 'src/XmlParser.ps1',
     'src/ExcelExporter.ps1', 'src/Login.ps1', 'src/BrowserProfile.ps1', 'src/XmlScheduler.ps1', 'src/InvoiceDetail.ps1',
     'src/LinkTraCuu.ps1', 'src/Desktop.ps1', 'src/DesktopSettings.ps1', 'src/DesktopUpdates.ps1',
-    'app-version.json', 'ui/vi-VN.json', 'ui/MainWindow.xaml', 'ui/AdvancedSettings.xaml')
+    'app-version.json', 'ui/vi-VN.json', 'ui/MainWindow.xaml', 'ui/AdvancedSettings.xaml', 'ui/hddt.ico')
 foreach ($part in $parts) {
     if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $part) -PathType Leaf)) { throw ('Thieu ma nguon: ' + $part) }
 }
@@ -51,7 +52,8 @@ try {
     if ($FolderBundle) { $name = 'HDDT-Downloader.exe' }
     $exe = Join-Path $OutputDirectory $name
     $arguments = @('/nologo', '/target:winexe', '/platform:anycpu', '/reference:System.Windows.Forms.dll',
-        '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll', ('/out:' + $exe))
+        '/reference:System.IO.Compression.dll', '/reference:System.IO.Compression.FileSystem.dll', ('/out:' + $exe),
+        ('/win32icon:' + (Join-Path $PSScriptRoot 'ui/hddt.ico')))
     if (-not $FolderBundle) {
         $payload = Join-Path $workDirectory 'payload.zip'
         Write-HddtBuildArchive -Path $payload -Root $PSScriptRoot -Parts $parts
@@ -72,6 +74,22 @@ try {
     }
     Write-Output ('App: ' + $exe)
     Write-Output ('Single file: ' + (-not $FolderBundle))
+    if (-not [string]::IsNullOrWhiteSpace($SignCertificateThumbprint)) {
+        # Ky Authenticode bang chung chi trong kho chung chi Windows; khong can Windows SDK.
+        $normalizedThumbprint = ($SignCertificateThumbprint -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
+        $certificate = Get-ChildItem -Path 'Cert:\CurrentUser\My', 'Cert:\LocalMachine\My' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Thumbprint -eq $normalizedThumbprint } | Select-Object -First 1
+        if ($null -eq $certificate) { throw ('Khong tim thay chung chi ky: ' + $SignCertificateThumbprint) }
+        $signParameters = @{ FilePath = $exe; Certificate = $certificate; HashAlgorithm = 'SHA256' }
+        if (-not [string]::IsNullOrWhiteSpace($TimestampUrl)) { $signParameters['TimestampServer'] = $TimestampUrl }
+        $signature = Set-AuthenticodeSignature @signParameters
+        if ($null -eq $signature.SignerCertificate) { throw 'Ky EXE that bai: khong co chu ky.' }
+        # Chung chi self-signed hoac chua duoc tin cay se tra ve trang thai khac Valid.
+        if ($signature.Status -ne 'Valid') {
+            Write-Warning ('Chu ky chua Valid: ' + $signature.Status + ' - ' + $signature.StatusMessage)
+        }
+        Write-Output ('Signed: ' + $certificate.Subject + ' (' + $certificate.Thumbprint + ') | trang thai: ' + $signature.Status)
+    }
 }
 finally {
     # Thu muc nay do build hien tai tao, nam truc tiep trong TEMP.

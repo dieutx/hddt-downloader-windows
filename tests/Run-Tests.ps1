@@ -1878,6 +1878,26 @@ finally {
     if (Test-Path -LiteralPath $resolvedDesktopDirectory) { Remove-Item -LiteralPath $resolvedDesktopDirectory -Recurse -Force }
 }
 
+# --- Icon app: ICO dung dinh dang va moi entry nam trong file ---
+$iconPath = Join-Path $root 'ui/hddt.ico'
+Assert-Equal $true (Test-Path -LiteralPath $iconPath -PathType Leaf) 'App icon file exists'
+$iconBytes = [IO.File]::ReadAllBytes($iconPath)
+Assert-Equal 0 ([BitConverter]::ToUInt16($iconBytes, 0)) 'App icon reserved field is zero'
+Assert-Equal 1 ([BitConverter]::ToUInt16($iconBytes, 2)) 'App icon type is ICO'
+$iconCount = [BitConverter]::ToUInt16($iconBytes, 4)
+$iconSizes = @()
+for ($iconIndex = 0; $iconIndex -lt $iconCount; $iconIndex++) {
+    $iconEntry = 6 + ($iconIndex * 16)
+    $iconSizes += [int]$iconBytes[$iconEntry]
+    $iconLength = [BitConverter]::ToUInt32($iconBytes, ($iconEntry + 8))
+    $iconOffset = [BitConverter]::ToUInt32($iconBytes, ($iconEntry + 12))
+    Assert-Equal $true (($iconLength -gt 0) -and (($iconOffset + $iconLength) -le $iconBytes.Length)) ('App icon entry fits in file: ' + $iconIndex)
+}
+foreach ($expectedIconSize in 16, 32, 48, 64, 128) {
+    Assert-Equal $true ($iconSizes -contains $expectedIconSize) ('App icon provides ' + $expectedIconSize + ' px image')
+}
+Assert-Equal $true ($iconSizes -contains 0) 'App icon provides a 256 px image'
+
 # --- Kiem tra cu phap toan bo script (bat loi encoding/thieu dau) ---
 $scriptPaths = @((Join-Path $root 'Invoke-Hddt.ps1'), (Join-Path $root 'Parse-LocalXml.ps1'))
 $scriptPaths += @(Get-ChildItem -LiteralPath (Join-Path $root 'src') -Filter '*.ps1' | ForEach-Object { $_.FullName })

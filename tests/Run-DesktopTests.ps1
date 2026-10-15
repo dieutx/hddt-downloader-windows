@@ -26,6 +26,10 @@ function Wait-DesktopWindowTask {
 
 $testDirectory = Join-Path ([IO.Path]::GetTempPath()) ('hddt-wpf-' + [guid]::NewGuid().ToString('N'))
 try {
+    # Icon app: XAML nap bang XmlReader nen icon phai duoc gan trong code.
+    Assert-Desktop ($null -ne $script:GuiWindow.Icon) 'Main window uses the app icon'
+    Assert-Desktop ($script:GuiWindow.Icon.PixelWidth -ge 256) 'App icon loads its largest frame'
+
     $script:GuiControls.Username.Text = 'fake-account'
     $script:GuiControls.Password.Password = 'synthetic-ui-password'
     $script:GuiControls.OutputPath.Text = Join-Path $testDirectory 'download.xlsx'
@@ -105,6 +109,7 @@ try {
     $script:GuiDefaults['XML_CONCURRENCY'] = '2'
     $script:GuiDefaults['XML_MAX_CONCURRENCY'] = '5'
     $settingsDialog = New-HddtGuiSettingsDialog
+    Assert-Desktop ($null -ne $settingsDialog.Window.Icon) 'Advanced settings window uses the app icon'
     Assert-Desktop ($settingsDialog.Controls.XML_CONCURRENCY.Text -eq '2') 'Advanced dialog shows the loaded config value'
     $settingsDialog.Controls.XML_CONCURRENCY.Text = '6'
     $settingsDialog.Controls.ApplySettings.RaiseEvent((New-Object Windows.RoutedEventArgs([Windows.Controls.Button]::ClickEvent)))
