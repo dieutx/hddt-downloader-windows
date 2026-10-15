@@ -148,6 +148,10 @@ function New-HddtGuiTextDialog {
 }
 
 function Update-HddtGuiRecentLog {
+    if ($script:GuiControls.ActivityLog.ActualWidth -gt 420) {
+        $width = [Math]::Max(240, $script:GuiControls.ActivityLog.ActualWidth - 182)
+        $script:GuiControls.ActivityLog.Columns[2].Width = New-Object Windows.Controls.DataGridLength($width)
+    }
     $limit = [Math]::Max(1, [Math]::Min(6, [int][Math]::Floor(($script:GuiControls.ActivityLog.ActualHeight - 25) / 23)))
     if ($limit -gt $script:GuiRecentLimit) {
         $selected = $script:GuiControls.ActivityLog.SelectedItem
