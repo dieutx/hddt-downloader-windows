@@ -75,7 +75,7 @@ Cùng bố cục nhưng `Ngày lập hóa đơn` và `Thuế suất` giữ **d�
 và sheet `ChiTietHD_Ban_XML` giữ `NBan`/`NMua` đúng theo tên node trong XML (không
 đảo nhãn).
 
-Dữ liệu lấy từ API detail sau XML HTTP 500 chỉ ghi vào sheet tổng hợp và chi
+Dữ liệu lấy từ API detail sau XML HTTP 500/504 chỉ ghi vào sheet tổng hợp và chi
 tiết (1, 2, 4, 5); không ghi vào hai sheet XML (3, 6). Trường API thiếu hoặc
 null giữ trống nếu danh sách chưa có giá trị; số lượng/đơn giá không suy diễn.
 
@@ -88,8 +88,8 @@ status, nội dung lỗi, số lần đã thử, `Retry-After`, kết quả cu�
 Nội dung lỗi đã redact qua `Protect-ExcelErrorText` (bỏ userinfo trong URL, `Bearer`,
 `Authorization`, mật khẩu/proxy). Có `autoFilter`.
 
-Nếu XML HTTP 500 được bổ sung dữ liệu bằng API detail, dòng báo cáo vẫn giữ
-HTTP 500 và lỗi XML gốc; cột kết quả cuối ghi `Da lay du lieu tu API detail`,
+Nếu XML HTTP 500/504 được bổ sung dữ liệu bằng API detail, dòng báo cáo vẫn giữ
+HTTP status 500/504 và lỗi XML gốc; cột kết quả cuối ghi `Da lay du lieu tu API detail`,
 cột ghi chú cho biết dữ liệu đã ghi vào tổng hợp/chi tiết và không có XML gốc.
 
 ## Sheet `LinkTraCuu` (8)
@@ -204,3 +204,9 @@ pwsh -NoProfile -File tests/Run-Tests.ps1
 Test mở lại file `.xlsx` vừa xuất và kiểm tra: đủ part bắt buộc, không entry nào
 giữ dấu `\`, quan hệ gốc trỏ đúng `xl/workbook.xml`, số sheet, thứ tự tên sheet,
 quan hệ hyperlink, và thứ tự phần tử `font` theo schema.
+
+Các lỗi parse XML local khác đường dẫn giữ thành các dòng báo cáo riêng.
+Khóa nhóm chi tiết gồm cả MST người bán và mẫu số để tránh trộn hóa đơn
+API detail cùng ký hiệu/số. Thuế suất thiếu giữ trống, khác thuế suất 0%.
+Khi không cho phép ghi đè, file đích xuất hiện trong lúc export cũng được giữ
+nguyên; bước cuối chỉ đổi tên sang đích chưa tồn tại.

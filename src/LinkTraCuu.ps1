@@ -366,7 +366,7 @@ function Read-TaiHoaDonDienTuLookupSheet {
 
         $sheetText = Get-TaiHoaDonDienTuZipEntryText $archive $target
         if ($null -eq $sheetText) { throw "File $Path không có dữ liệu sheet '$SheetName'." }
-        $sharedStrings = Get-TaiHoaDonDienTuSharedStrings $archive
+        $sharedStrings = @(Get-TaiHoaDonDienTuSharedStrings $archive)
         $sheetDocument = [xml]$sheetText
         $sheetManager = New-Object Xml.XmlNamespaceManager($sheetDocument.NameTable)
         $sheetManager.AddNamespace('x', 'http://schemas.openxmlformats.org/spreadsheetml/2006/main')
@@ -432,7 +432,7 @@ function Import-TaiHoaDonDienTuLookupTable {
         # Khoá của một dòng là cặp (MST nhà cung cấp, MST người bán): cùng MST
         # nhà cung cấp nhưng khác MST người bán là hai dòng khác nhau, đúng như
         # sheet LinkTraCuu gốc.
-        for ($index = 1; $index -lt $script:TaiHoaDonDienTuLookupSheetData.Count; $index++) {
+        for ($index = $script:TaiHoaDonDienTuLookupSheetData.Count - 1; $index -ge 1; $index--) {
             $current = $script:TaiHoaDonDienTuLookupSheetData[$index]
             if ((Get-TaiHoaDonDienTuLookupCell $current 'B') -ne $provider) { continue }
             if ((Get-TaiHoaDonDienTuLookupCell $current 'C') -ne $seller) { continue }

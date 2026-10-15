@@ -211,10 +211,12 @@ function ConvertTo-ExcelTaxRate {
     param($Value)
     if ($null -eq $Value) { return $null }
     $text = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return $null }
     if ($text -in @('KKKNT', 'KCT')) { return $text }
     $isPercent = $text.EndsWith('%')
     $numberText = if ($isPercent) { $text.Substring(0, $text.Length - 1).Trim() } else { $text }
     $number = ConvertTo-ExcelNumber $numberText
+    if ($null -eq $number) { return $null }
     if ($number -is [string]) { return $Value }
     if ($isPercent) { return ([double]$number) / 100.0 }
     if ([double]$number -gt 1) { return ([double]$number) / 100.0 }
@@ -412,7 +414,9 @@ function Get-ExcelDetailGroupKey {
     $series = Get-ExcelText $summary 'InvoiceSeries' (Get-ExcelText $Detail 'InvoiceSeries' '')
     $number = Get-ExcelText $summary 'InvoiceNumber' (Get-ExcelText $Detail 'InvoiceNumber' '')
     $direction = Get-ExcelText $summary 'Direction' (Get-ExcelText $Detail 'Direction' '')
-    $key = '{0}|{1}|{2}|{3}|{4}' -f $direction, $xmlFile, $invoiceId, $series, $number
+    $seller = Get-ExcelText $summary 'SellerTaxCode' (Get-ExcelText $Detail 'SellerTaxCode' '')
+    $template = Get-ExcelText $summary 'TemplateCode' (Get-ExcelText $Detail 'TemplateCode' '')
+    $key = '{0}|{1}|{2}|{3}|{4}|{5}|{6}' -f $direction, $xmlFile, $invoiceId, $series, $number, $seller, $template
     if ([string]::IsNullOrWhiteSpace($key.Replace('|', ''))) { return [string]$Index }
     return $key
 }
@@ -811,7 +815,12 @@ function New-ExcelXmlRows {
 
 function Get-ExcelErrorKey {
     param($ErrorRow)
-    return '{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}' -f (
+    # Loi local khong co khoa hoa don; phan biet bang duong dan XML.
+    $localPath = ''
+    if ((Get-ExcelText $ErrorRow 'Source' '') -eq 'local-xml') {
+        $localPath = Get-ExcelText $ErrorRow 'Endpoint' ''
+    }
+    return '{0}|{1}|{2}|{3}|{4}|{5}|{6}|{7}|{8}' -f (
         (Get-ExcelText $ErrorRow 'Direction' '').ToUpperInvariant(),
         (Get-ExcelText $ErrorRow 'Source' '').ToUpperInvariant(),
         (Get-ExcelText $ErrorRow 'Period' '').ToUpperInvariant(),
@@ -819,7 +828,8 @@ function Get-ExcelErrorKey {
         (Get-ExcelText $ErrorRow 'InvoiceTemplate' '').ToUpperInvariant(),
         (Get-ExcelText $ErrorRow 'InvoiceSeries' '').ToUpperInvariant(),
         (Get-ExcelText $ErrorRow 'InvoiceNumber' '').ToUpperInvariant(),
-        (Get-ExcelText $ErrorRow 'Stage' 'Tải XML').ToUpperInvariant()
+        (Get-ExcelText $ErrorRow 'Stage' 'Tải XML').ToUpperInvariant(),
+        $localPath
     )
 }
 
@@ -1394,7 +1404,7 @@ function Export-InvoiceWorkbook {
         # thành phần bắt buộc. Nếu file đang mở, thay thế thất bại hoặc gói
         # hỏng, bản cũ vẫn còn nguyên.
         Assert-ExcelPackage -Path $stagingPath -Parts $packageParts.ToArray()
-        if (Test-Path -LiteralPath $Path) {
+        if ($Overwrite -and (Test-Path -LiteralPath $Path)) {
             [IO.File]::Replace($stagingPath, $Path, $backupPath)
             if (Test-Path -LiteralPath $backupPath) { Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue }
         }

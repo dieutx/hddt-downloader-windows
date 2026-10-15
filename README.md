@@ -19,10 +19,44 @@ Công cụ PowerShell để tải **XML hóa đơn điện tử** từ GDT và x
 
 ### App có giao diện — Windows 10 / Windows 11
 
-Tải [gói portable v1.0.0](https://github.com/dieutx/hddt-downloader-windows/releases/download/v1.0.0/HDDT-Downloader-v1.0.0-windows.zip),
-giải nén toàn bộ rồi chạy **`HDDT-Downloader.exe`**.
-Xem [các bản phát hành](https://github.com/dieutx/hddt-downloader-windows/releases)
-và [changelog](CHANGELOG.md).
+Bản v1.1.1 mặc định là **một file EXE duy nhất**. Nhấn đúp
+`HDDT-Downloader-v1.1.1-windows.exe` để chạy; không cần tự giải nén, cài đặt,
+PowerShell 7, Node.js hoặc Excel. App dùng Windows PowerShell 5.1 và .NET
+Framework có sẵn trên Windows 10/11.
+
+Giao diện compact gồm header nhỏ, form hóa đơn và điều khiển tải hai cột,
+tiến độ và nhật ký luôn nhìn thấy. Không cuộn toàn trang ở các kích thước
+mục tiêu 1160×768, 1366×768, 1440×900, 1920×1080. Nhật ký chính hiển thị
+4–6 dòng gần nhất tùy chiều cao; nút con mắt hiện/ẩn mật khẩu để kiểm tra
+trước khi tải. **Mở rộng nhật ký** xem toàn bộ trong cửa
+sổ riêng. Proxy mở trong panel nhỏ; chuyển tab giữ dữ liệu đã nhập.
+
+File Excel/XML/log mặc định lưu tại thư mục **HDDT-Downloader** trong
+Documents; có thể chọn nơi lưu khác trên giao diện. Cấu hình tải/nhật ký
+được lưu tại `%LOCALAPPDATA%\HDDT-Downloader\hddt-settings.json`, dùng chung
+khi đổi tên, di chuyển hoặc chạy phiên bản EXE mới. Không lưu mật khẩu.
+Mã chương trình được EXE tự nạp vào thư mục tạm riêng khi chạy và dọn khi
+thoát bình thường; người dùng không cần thao tác với các file bên trong.
+
+App kiểm tra GitHub Releases bằng tác vụ nền khi mở và qua nút **Cập nhật**.
+Khi có bản mới: bấm **Tải bản mới**, chọn nơi lưu, rồi nhấn đúp EXE vừa tải.
+Không cần giải nén. Nội dung thay đổi mở bằng **Chi tiết** hoặc chỉ báo
+**Bản mới** trên header. Màn hình thấp dùng chỉ báo header để dành chỗ cho
+nhật ký. Thông báo có thể đóng. App vẫn hỗ trợ ZIP portable của release cũ.
+Lỗi kiểm tra cập nhật không chặn tải hóa đơn/chuyển XML offline.
+
+Nguồn phiên bản là `app-version.json`, đồng bộ vào metadata EXE. Khi phát hành,
+đính kèm file `HDDT-Downloader-vX.Y.Z-windows.exe` vào GitHub Release có tag
+`vX.Y.Z` tương ứng. Checksum SHA-256 của asset được kiểm tra nếu API GitHub
+cung cấp. Không gửi tài khoản/mật khẩu/token GDT đến GitHub.
+
+Kiểm thử phần cập nhật và bản EXE (dữ liệu giả, không gọi GDT):
+
+```powershell
+powershell -NoProfile -File tests/Run-UpdateTests.ps1
+powershell -NoProfile -File tests/Run-SingleFileTests.ps1 -ExePath <duong-dan-exe>
+powershell -NoProfile -STA -File tests/Run-LayoutTests.ps1 -PreviewDirectory <thu-muc-anh>
+```
 
 Có thể chạy giao diện WPF bằng cách nhấn đúp **`run-gui.cmd`**, hoặc:
 
@@ -42,7 +76,7 @@ powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\Start-HddtGui.ps1
   số hóa đơn mỗi trang, tự điều tiết danh sách và ghi nhật ký. Có nút khôi phục
   mặc định; tham số được kiểm tra trước khi áp dụng cho lần chạy tiếp theo.
 - Bật **Ghi nhớ cho lần mở app sau** để lưu các tham số này vào
-  `hddt-settings.json` cạnh app. File chỉ chứa tham số tải/nhật ký. Nếu không bật,
+  `hddt-settings.json` trong thư mục dữ liệu của app. File chỉ chứa tham số tải/nhật ký. Nếu không bật,
   thay đổi chỉ dùng trong phiên hiện tại; muốn lưu thì thư mục app cần có quyền
   ghi. Nạp `.env` sau đó sẽ ưu tiên giá trị trong `.env` cho phiên hiện tại.
 - Giao diện luôn từ chối ghi đè Excel đã có, kể cả khi `.env` đặt
@@ -59,10 +93,19 @@ Windows, macOS và Linux.
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-WindowsApp.ps1
 ```
 
-Script in đường dẫn app và ZIP trong `work/desktop/`. Giải nén toàn bộ ZIP vào
-thư mục có quyền ghi, rồi nhấn đúp `HDDT-Downloader.exe`. Giữ `.exe` cùng các
-file/thu mục đi kèm. Gói build chỉ chứa mã nguồn, không kèm `.env`, `output/`
-hoặc dữ liệu hóa đơn của người dùng. Mỗi lần build tạo một thư mục mới.
+Script in đường dẫn một EXE trong thư mục build mới ở `work/desktop/`.
+Chỉ cần sao chép file EXE đó để sử dụng hoặc chia sẻ. Build dùng danh sách
+mã nguồn tường minh, không kèm `.env`, cấu hình cá nhân hoặc hóa đơn.
+
+Nếu cần gói thư mục/ZIP kiểu cũ để phát triển hoặc hỗ trợ release trước:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-WindowsApp.ps1 -FolderBundle
+```
+
+Bản chạy từ source hoặc `-FolderBundle` tiếp tục dùng cấu hình/output cạnh
+script như trước. Dữ liệu ở các bản portable cũ được giữ nguyên; có thể nạp
+lại `.env` hoặc chọn các thư mục dữ liệu cũ trên giao diện.
 
 Kiểm thử giao diện và luồng offline (không dùng tài khoản GDT):
 

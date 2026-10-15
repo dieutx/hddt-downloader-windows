@@ -940,15 +940,15 @@ try {
         HttpTimeoutSeconds = 30
     }
     Reset-HddtStopRequest
-    $script:OriginalSleep = ${function:Start-Sleep}
-    Set-Item Function:\Start-Sleep -Value { param($Seconds) $script:RateLimitSleptSeconds += [int]$Seconds }
+    $script:OriginalRetryWait = ${function:Wait-HddtRetryDelay}
+    Set-Item Function:\Wait-HddtRetryDelay -Value { param($Seconds) $script:RateLimitSleptSeconds += [int]$Seconds }
     $result429 = Invoke-GdtRequest -Config $rlConfig -Uri ($rlConfig.BaseUrl + '/invoices/query')
     Assert-Equal 7 $script:RateLimitHits '429 retries continue until success'
     Assert-Equal '{"ok":true}' $result429 'Request succeeds after rate-limit window'
     Assert-Equal 6 @($script:RateLimitSleptSeconds).Count 'Each 429 retry waits with backoff'
 }
 finally {
-    Set-Item Function:\Start-Sleep -Value $script:OriginalSleep
+    Set-Item Function:\Wait-HddtRetryDelay -Value $script:OriginalRetryWait
     Remove-Item Function:\Invoke-WebRequest -ErrorAction SilentlyContinue
 }
 
@@ -1890,5 +1890,6 @@ foreach ($scriptPath in $scriptPaths) {
 }
 
 . (Join-Path $PSScriptRoot 'Test-InvoiceDetail.ps1')
+. (Join-Path $PSScriptRoot 'Test-ReviewRegression.ps1')
 
 Write-Host 'All tests passed.' -ForegroundColor Green

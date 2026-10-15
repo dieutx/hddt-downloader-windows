@@ -1,3 +1,5 @@
+param([string]$SingleFileExePath, [string]$LayoutPreviewDirectory)
+
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Kiem thu WPF can Windows.' }
@@ -33,8 +35,72 @@ try {
     Assert-Desktop ($guiValues.FROM_DATE -match '^\d{2}/\d{2}/\d{4}$') 'DatePicker uses the CLI date contract'
     $guiValues.Clear()
 
+    # Mat khau mac dinh an; nut con mat chi dong bo trong bo nho.
+    Assert-Desktop (-not $script:GuiControls.TogglePassword.IsChecked) 'Password is masked by default'
+    $script:GuiControls.TogglePassword.IsChecked = $true
+    Assert-Desktop ($script:GuiControls.PasswordVisible.Text -eq 'synthetic-ui-password') 'Eye button reveals current password'
+    Assert-Desktop ($script:GuiControls.PasswordVisible.Visibility -eq 'Visible') 'Eye button displays editable password text'
+    $script:GuiControls.PasswordVisible.Text = 'synthetic-edited-password'
+    $guiValues = Get-HddtGuiValues
+    Assert-Desktop ($guiValues.GDT_PASSWORD -eq 'synthetic-edited-password') 'Visible password edits reach login values unchanged'
+    $guiValues.Clear()
+    $script:GuiControls.TogglePassword.IsChecked = $false
+    Assert-Desktop ($script:GuiControls.Password.Password -eq 'synthetic-edited-password') 'Hiding password preserves edited value'
+    Assert-Desktop ($script:GuiControls.PasswordVisible.Text.Length -eq 0) 'Hiding password clears plain text control'
+    $script:GuiControls.Password.Password = 'synthetic-ui-password'
+    $script:GuiControls.TogglePassword.IsChecked = $true
+    Set-HddtGuiBusy $true
+    Assert-Desktop (-not $script:GuiControls.TogglePassword.IsChecked) 'Starting a run restores masked password'
+    Set-HddtGuiBusy $false
+
     # Cai dat nang cao: control that, validation, huy, reset va luu an toan.
     $null = New-Item -ItemType Directory -Path $testDirectory
+    # Ban cap nhat phai hien thong tin va duoc xu ly ca khi khong tai hoa don.
+    $testRelease = [pscustomobject]@{
+        Version = '1.2.0'; IsNewer = $true; ReleaseUrl = 'https://github.com/dieutx/hddt-downloader-windows/releases/tag/v1.2.0'
+        Notes = 'Synthetic release notes'; PublishedAt = '2026-01-01T00:00:00Z'
+        DownloadUrl = 'https://github.com/dieutx/hddt-downloader-windows/releases/download/v1.2.0/HDDT-Downloader-v1.2.0-windows.zip'
+        AssetName = 'HDDT-Downloader-v1.2.0-windows.zip'; Size = 100L
+    }
+    Update-HddtGuiReleaseState $testRelease
+    Assert-Desktop ($script:GuiControls.UpdateTitle.Text.Contains('1.2.0')) 'Update banner shows new version'
+    Assert-Desktop ($script:GuiControls.DownloadUpdate.Visibility -eq 'Visible') 'New stable Windows release enables download'
+    Assert-Desktop ($script:GuiLatestRelease.Notes -eq 'Synthetic release notes') 'UI shows release notes as plain text'
+    $testRelease.DownloadUrl = ''
+    Update-HddtGuiReleaseState $testRelease
+    Assert-Desktop ($script:GuiControls.DownloadUpdate.Visibility -eq 'Collapsed') 'No Windows asset hides download button'
+    $testRelease.IsNewer = $false
+    Update-HddtGuiReleaseState $testRelease
+    Assert-Desktop ($script:GuiControls.DownloadUpdate.Visibility -eq 'Collapsed') 'Same/older public version never offers downgrade'
+
+    $fakeRoot = Join-Path $testDirectory 'fake-update-root'
+    $null = New-Item -ItemType Directory -Path (Join-Path $fakeRoot 'src') -Force
+    $fakeModule = Join-Path $fakeRoot 'src/DesktopUpdates.ps1'
+    [IO.File]::WriteAllText($fakeModule, 'function Get-HddtLatestRelease { param($CurrentVersion); Start-Sleep -Milliseconds 250; throw "Synthetic offline condition" }')
+    $script:GuiControls.CheckUpdates.IsEnabled = $false
+    $watch = [Diagnostics.Stopwatch]::StartNew()
+    $script:GuiUpdateTask = Start-HddtUpdateTask -Root $fakeRoot -CurrentVersion '1.1.0'
+    Assert-Desktop ($watch.ElapsedMilliseconds -lt 1000) 'Starting update check does not block UI'
+    $deadline = [datetime]::UtcNow.AddSeconds(5)
+    while ($null -ne $script:GuiUpdateTask -and [datetime]::UtcNow -lt $deadline) {
+        Receive-HddtGuiUpdateTask
+        Start-Sleep -Milliseconds 20
+    }
+    Assert-Desktop ($null -eq $script:GuiUpdateTask) 'Offline update releases its pipeline'
+    Assert-Desktop $script:GuiControls.CheckUpdates.IsEnabled 'Offline update allows retry'
+    Assert-Desktop $script:GuiControls.StartRun.IsEnabled 'Offline update does not disable invoice actions'
+
+    $script:GuiStartedAt = (Get-Date).AddSeconds(-20)
+    Add-HddtGuiLog '[2/10 | 20%] synthetic progress'
+    Assert-Desktop ($script:GuiControls.ProcessedCount.Text -eq '2' -and $script:GuiControls.RemainingCount.Text -eq '8') 'Metrics display progress counts'
+    Assert-Desktop ($script:GuiControls.PercentText.Text -eq '20%') 'Metrics display percent'
+    Assert-Desktop ($script:GuiControls.EstimatedTime.Text -ne '-') 'Metrics estimate time after progress'
+    $script:GuiControls.ActivityLog.SelectedIndex = 0
+    Assert-Desktop ($script:GuiControls.LogDetail.Text.Contains('synthetic progress')) 'Selecting a row shows full log text'
+    Add-HddtGuiLog (Protect-HddtDesktopText 'synthetic-ui-secret' @('synthetic-ui-secret'))
+    Assert-Desktop (-not $script:GuiActivity[$script:GuiActivity.Count - 1].Message.Contains('synthetic-ui-secret')) 'Activity grid uses redacted log text'
+    $script:GuiActivity.Clear()
+
     $script:GuiSettingsPath = Join-Path $testDirectory 'hddt-settings.json'
     $script:GuiDefaults['XML_CONCURRENCY'] = '2'
     $script:GuiDefaults['XML_MAX_CONCURRENCY'] = '5'
@@ -98,7 +164,7 @@ try {
     Wait-DesktopWindowTask
     Assert-Desktop (-not (Test-Path -LiteralPath (Join-Path $testDirectory 'stopped.xlsx'))) 'Stopping before data does not create an empty workbook'
     Assert-Desktop (-not $script:GuiControls.StopRun.IsEnabled) 'UI resets Stop after completion'
-    Assert-Desktop ($script:GuiControls.Status.Text -like 'Da dung an toan*') 'UI reports safe stop'
+    Assert-Desktop ($script:GuiControls.Status.Text -eq $script:GuiText.ProgressStopped) 'UI reports safe stop'
 
     # Co du lieu roi moi dung: workbook van chua phan XML da xu ly.
     $manyXmlDirectory = Join-Path $testDirectory 'many-xml'
@@ -138,6 +204,9 @@ try {
     $script:GuiWindow.Close()
     Assert-Desktop $script:GuiCloseWhenDone 'Closing requests a safe stop before exiting'
     Wait-DesktopWindowTask
+    & (Join-Path $PSScriptRoot 'Run-UpdateTests.ps1')
+    if (-not [string]::IsNullOrWhiteSpace($SingleFileExePath)) { & (Join-Path $PSScriptRoot 'Run-SingleFileTests.ps1') -ExePath $SingleFileExePath }
+    if (-not [string]::IsNullOrWhiteSpace($LayoutPreviewDirectory)) { & (Join-Path $PSScriptRoot 'Run-LayoutTests.ps1') -PreviewDirectory $LayoutPreviewDirectory }
     Write-Host 'All desktop tests passed.'
 }
 finally {

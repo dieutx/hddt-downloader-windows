@@ -84,6 +84,7 @@ function New-HddtXmlSharedState {
 
     $shared = [hashtable]::Synchronized(@{
         SyncRoot = (New-Object object)
+        AuthSyncRoot = (New-Object object)
         StopRequested = $false
         RunContext = $script:HddtRunContext
         Token = [string](Get-HddtConfigValue $Config 'Token' '')
@@ -230,7 +231,7 @@ function Register-GdtXmlRateLimit {
         }
 
         $oldInterval = [int]$shared.XmlCurrentIntervalMs
-        $newInterval = [Math]::Min(5000, [Math]::Max([int]$shared.XmlBaseIntervalMs, [int][Math]::Floor($oldInterval * 1.5)))
+        $newInterval = [Math]::Max([int]$shared.XmlBaseIntervalMs, [Math]::Min(5000, [int][Math]::Floor($oldInterval * 1.5)))
         $shared.XmlCurrentIntervalMs = $newInterval
 
         $shared.XmlLastRateLimitUtc = [datetime]::UtcNow
@@ -395,10 +396,10 @@ function Get-GdtXmlDownloadResult {
             RetryAfterSeconds = Get-GdtLastRetryAfterSeconds
             ErrorMessage = $_.Exception.Message
         }
-        if ($xmlFailure.StatusCode -eq 500 -and -not (Test-HddtStopRequested)) {
+        if ($xmlFailure.StatusCode -in @(500, 504) -and -not (Test-HddtStopRequested)) {
             try {
                 $watch.Start()
-                Write-HddtLog INFO ('[API DETAIL] XML HTTP 500; lay chi tiet hoa don {0}.' -f $label)
+                Write-HddtLog INFO ('[API DETAIL] XML HTTP {0}; lay chi tiet hoa don {1}.' -f $xmlFailure.StatusCode, $label)
                 $apiDetail = Get-GdtInvoiceDetail -Config $Config -Invoice $Invoice
                 $watch.Stop()
                 return [pscustomobject]@{
@@ -420,7 +421,7 @@ function Get-GdtXmlDownloadResult {
                     ResponseTimeMs = [int]$watch.ElapsedMilliseconds
                     Endpoint = Get-GdtLastRequestUri; StatusCode = Get-GdtLastStatusCode
                     Attempts = Get-GdtLastRequestAttempts; RetryAfterSeconds = Get-GdtLastRetryAfterSeconds
-                    ErrorMessage = ('XML HTTP 500; API detail that bai: {0}' -f $_.Exception.Message)
+                    ErrorMessage = ('XML HTTP {0}; API detail that bai: {1}' -f $xmlFailure.StatusCode, $_.Exception.Message)
                 }
             }
         }
