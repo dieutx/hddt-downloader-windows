@@ -34,6 +34,7 @@ try {
             finally { $stream.Dispose(); $hash.Dispose() }
             Assert-SingleFile ($actual -eq (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash) ('Embedded source matches reviewed file: ' + $entry.FullName)
         }
+        Assert-SingleFile ($null -ne $embedded.GetEntry('ui/hddt.ico')) 'Payload carries the app icon used by the WPF window'
     }
     finally { $embedded.Dispose(); $payload.Dispose() }
     $runDirectory = Join-Path $testRoot 'first run'

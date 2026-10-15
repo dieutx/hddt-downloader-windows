@@ -16,6 +16,7 @@ sheet/cột của bản gốc `TaiHoaDonDienTu`.
 | CLI | Windows PowerShell 5.1, PowerShell 7 trên Windows/macOS/Linux |
 | Không cần cài | Excel, Node.js, PowerShell 7 (khi dùng EXE), thư viện ngoài |
 | Không chứa | VBA, sheet `MENU`, dữ liệu hóa đơn hoặc tài khoản trong gói phát hành |
+| Chữ ký số | Chưa ký code-signing; xem [Cảnh báo SmartScreen](#cảnh-báo-smartscreen-khi-mở-exe) |
 
 ![Giao diện HDDT Downloader v1.1.1](docs/images/hddt-desktop-v1.1.1.png)
 
@@ -96,6 +97,41 @@ hóa đơn, tải XML và tạo Excel.
 Không muốn sửa `.env`? Chạy `run-interactive.cmd` để nhập trực tiếp tài khoản,
 mật khẩu (chế độ bí mật), khoảng ngày, chiều hóa đơn, thư mục đầu ra và proxy.
 Nhập `CLEAR` ở ô proxy để tắt proxy.
+
+### Cảnh báo SmartScreen khi mở EXE
+
+Bản EXE chưa được ký code-signing nên Windows có thể hiện **Windows protected
+your PC — Unknown publisher** khi mở file vừa tải bằng trình duyệt. Cách xử lý:
+
+- **Bỏ cảnh báo cho file đang có:** chuột phải file → **Properties** → tick
+  **Unblock** → OK, hoặc `Unblock-File .\HDDT-Downloader-vX.Y.Z-windows.exe`.
+  Cảnh báo có vì file tải bằng trình duyệt mang Mark-of-the-Web (MOTW).
+- **Đường cập nhật trong app không gặp cảnh báo này:** EXE do **Tải bản mới**
+  tải bằng .NET không kèm MOTW (đã kiểm tra: file không có stream
+  `Zone.Identifier`).
+- **Bỏ hẳn cảnh báo:** phải ký Authenticode bằng chứng chỉ code-signing. Từ
+  2024 cả chứng chỉ OV lẫn EV đều **không** còn được SmartScreen tin ngay;
+  chữ ký giúp hiện tên publisher và giúp danh tiếng tích lũy qua các bản phát
+  hành cùng một danh tính ký.
+
+Sau khi có chứng chỉ trong kho chứng chỉ Windows (`CurrentUser\My` hoặc
+`LocalMachine\My`), build kèm thumbprint để ký SHA-256 và đóng mốc thời gian:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-WindowsApp.ps1 `
+    -SignCertificateThumbprint <thumbprint>
+# mặc định mốc thời gian http://timestamp.digicert.com; đổi bằng -TimestampUrl
+```
+
+Script in ra chủ thể chứng chỉ và trạng thái chữ ký (`Valid` khi chứng chỉ
+được tin cậy; chứng chỉ self-signed chỉ dùng để thử và vẫn bị SmartScreen chặn).
+
+Lựa chọn chứng chỉ/dịch vụ ký: **Azure Artifact Signing** (trước là Azure
+Trusted Signing, khoảng 10 USD/tháng; tổ chức ở US/CA/EU/UK, cá nhân ở US/CA),
+**chứng chỉ OV** từ CA (~150–300 USD/năm, cần HSM/USB token), **SignPath
+Foundation** miễn phí cho dự án open source đủ điều kiện, hoặc phát hành MSIX
+qua Microsoft Store (Microsoft ký lại, không có cảnh báo). Chi tiết:
+[tài liệu Microsoft](https://learn.microsoft.com/windows/apps/package-and-deploy/code-signing-options).
 
 ---
 
@@ -320,10 +356,12 @@ powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\Start-HddtGui.ps1
 ```
 
 **Checklist phát hành:** cập nhật `app-version.json` (nguồn phiên bản, đồng bộ
-vào metadata EXE) → build EXE → chạy kiểm thử → tạo GitHub Release tag `vX.Y.Z`
-→ đính kèm `HDDT-Downloader-vX.Y.Z-windows.exe` kèm file checksum SHA-256 →
-tải lại asset từ GitHub để xác nhận size/checksum. Không đẩy tài khoản, mật
-khẩu hay token GDT lên GitHub.
+vào metadata EXE) → build EXE, thêm `-SignCertificateThumbprint` nếu đã có
+chứng chỉ → chạy kiểm thử → kiểm tra `Get-AuthenticodeSignature` trả về `Valid`
+→ tạo GitHub Release tag `vX.Y.Z` → đính kèm
+`HDDT-Downloader-vX.Y.Z-windows.exe` kèm file checksum SHA-256 → tải lại asset
+từ GitHub để xác nhận size/checksum. Không đẩy tài khoản, mật khẩu hay token
+GDT lên GitHub.
 
 ---
 

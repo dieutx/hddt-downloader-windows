@@ -3,6 +3,11 @@
 ## v1.1.1 — 2026-10-15
 
 - Chỉ một file EXE: nhấn đúp chạy, không cần tự giải nén hoặc cài đặt.
+- Icon riêng cho app (16–256 px) dùng trong Explorer, title bar và taskbar; cửa sổ
+  WPF nạp icon từ payload khi khởi động.
+- Build hỗ trợ ký Authenticode sẵn (`-SignCertificateThumbprint`, SHA-256 kèm mốc
+  thời gian) khi đã có chứng chỉ; bản phát hành hiện tại chưa ký nên Windows có
+  thể hiện cảnh báo SmartScreen — xem mục SmartScreen trong `README.md`.
 - Giao diện compact: header nhỏ, form hai cột, tiến độ và nhật ký luôn nhìn thấy;
   nút con mắt hiện/ẩn mật khẩu, giữ giá trị chỉnh sửa trong bộ nhớ.
 - Nhật ký 4–6 dòng gần nhất, màu INFO/SUCCESS/WARNING/ERROR và cửa sổ xem toàn bộ.
