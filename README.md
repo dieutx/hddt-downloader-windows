@@ -1,120 +1,78 @@
 # HDDT Downloader
 
-Công cụ PowerShell để tải **XML hóa đơn điện tử** từ GDT và xuất thành file Excel.
+Công cụ PowerShell tải **XML hóa đơn điện tử** từ hệ thống GDT
+(`hoadondientu.gdt.gov.vn`) và xuất ra workbook `.xlsx` theo đúng bố cục
+sheet/cột của bản gốc `TaiHoaDonDienTu`.
 
-- Tải hóa đơn **mua vào** và **bán ra**.
-- Tự động lấy CAPTCHA và đăng nhập bằng tài khoản GDT.
-- Có thể dùng proxy/VPN khi IP hiện tại bị GDT hạn chế.
-- Xuất Excel dạng dữ liệu, không chứa VBA hoặc sheet `MENU`.
-- Có thể chạy bằng `.env` hoặc nhập cấu hình trực tiếp.
+- Tải hóa đơn **mua vào** và **bán ra**; tự lấy CAPTCHA và đăng nhập GDT.
+- Xuất Excel dạng dữ liệu (không VBA, không sheet `MENU`) đúng bố cục bản gốc.
+- Có app Windows một file EXE, và CLI dùng `.env` hoặc nhập trực tiếp.
+- Hỗ trợ proxy/VPN khi IP hiện tại bị GDT hạn chế; chuyển XML có sẵn sang Excel offline.
+
+| Hạng mục | Nội dung |
+|---|---|
+| Phiên bản | v1.1.1 |
+| App Windows | Một file EXE, nhấn đúp là chạy (Windows 10/11) |
+| CLI | Windows PowerShell 5.1, PowerShell 7 trên Windows/macOS/Linux |
+| Không cần cài | Excel, Node.js, PowerShell 7 (khi dùng EXE), thư viện ngoài |
+| Không chứa | VBA, sheet `MENU`, dữ liệu hóa đơn hoặc tài khoản trong gói phát hành |
 
 ![Giao diện HDDT Downloader v1.1.1](docs/images/hddt-desktop-v1.1.1.png)
 
+📺 [Video hướng dẫn sử dụng](https://www.youtube.com/watch?v=nLWvosy-IM0)
+
+## Mục lục
+
+1. [Bắt đầu nhanh trên Windows](#1-bắt-đầu-nhanh-trên-windows)
+2. [App EXE: dữ liệu, cấu hình, cập nhật](#2-app-exe-dữ-liệu-cấu-hình-cập-nhật)
+3. [Kết quả Excel](#3-kết-quả-excel)
+4. [Cấu hình `.env`](#4-cấu-hình-env)
+5. [Proxy](#5-proxy)
+6. [Chuyển XML có sẵn sang Excel](#6-chuyển-xml-có-sẵn-sang-excel)
+7. [Linux / macOS](#7-linux--macos)
+8. [Cơ chế tải XML và xử lý lỗi](#8-cơ-chế-tải-xml-và-xử-lý-lỗi)
+9. [Build và phát hành](#9-build-và-phát-hành)
+10. [Kiểm thử](#10-kiểm-thử)
+11. [Bảo mật](#11-bảo-mật)
+12. [Đóng góp](#12-đóng-góp)
+
 ---
-## 📺 Video hướng dẫn
 
-👉 [Xem video hướng dẫn sử dụng](https://www.youtube.com/watch?v=nLWvosy-IM0)
+## 1. Bắt đầu nhanh trên Windows
 
+### Cách A — App có giao diện (khuyến nghị)
 
-## 1. Chạy nhanh trên Windows
+1. Tải `HDDT-Downloader-v1.1.1-windows.exe` tại
+   [GitHub Releases](https://github.com/dieutx/hddt-downloader-windows/releases).
+2. Nhấn đúp file EXE. Không cần tự giải nén, cài đặt hay cài PowerShell 7;
+   app dùng Windows PowerShell 5.1 và .NET Framework có sẵn.
+3. Nhập mã số thuế + mật khẩu GDT, chọn khoảng ngày và chiều hóa đơn, rồi bấm
+   **Bắt đầu**.
 
-### App có giao diện — Windows 10 / Windows 11
+Giao diện compact: header nhỏ, form hóa đơn và điều khiển tải hai cột, tiến độ
+và nhật ký luôn nhìn thấy — không phải cuộn toàn trang ở 1160×768, 1366×768,
+1440×900 hay 1920×1080. Nhật ký chính hiện 4–6 dòng gần nhất, **Mở rộng nhật
+ký** xem toàn bộ trong cửa sổ riêng, nút con mắt để hiện/ẩn mật khẩu. Proxy mở
+trong panel nhỏ; chuyển tab giữ nguyên dữ liệu đã nhập.
 
-Bản v1.1.1 mặc định là **một file EXE duy nhất**. Nhấn đúp
-`HDDT-Downloader-v1.1.1-windows.exe` để chạy; không cần tự giải nén, cài đặt,
-PowerShell 7, Node.js hoặc Excel. App dùng Windows PowerShell 5.1 và .NET
-Framework có sẵn trên Windows 10/11.
-
-Giao diện compact gồm header nhỏ, form hóa đơn và điều khiển tải hai cột,
-tiến độ và nhật ký luôn nhìn thấy. Không cuộn toàn trang ở các kích thước
-mục tiêu 1160×768, 1366×768, 1440×900, 1920×1080. Nhật ký chính hiển thị
-4–6 dòng gần nhất tùy chiều cao; nút con mắt hiện/ẩn mật khẩu để kiểm tra
-trước khi tải. **Mở rộng nhật ký** xem toàn bộ trong cửa
-sổ riêng. Proxy mở trong panel nhỏ; chuyển tab giữ dữ liệu đã nhập.
-
-File Excel/XML/log mặc định lưu tại thư mục **HDDT-Downloader** trong
-Documents; có thể chọn nơi lưu khác trên giao diện. Cấu hình tải/nhật ký
-được lưu tại `%LOCALAPPDATA%\HDDT-Downloader\hddt-settings.json`, dùng chung
-khi đổi tên, di chuyển hoặc chạy phiên bản EXE mới. Không lưu mật khẩu.
-Mã chương trình được EXE tự nạp vào thư mục tạm riêng khi chạy và dọn khi
-thoát bình thường; người dùng không cần thao tác với các file bên trong.
-
-App kiểm tra GitHub Releases bằng tác vụ nền khi mở và qua nút **Cập nhật**.
-Khi có bản mới: bấm **Tải bản mới**, chọn nơi lưu, rồi nhấn đúp EXE vừa tải.
-Không cần giải nén. Nội dung thay đổi mở bằng **Chi tiết** hoặc chỉ báo
-**Bản mới** trên header. Màn hình thấp dùng chỉ báo header để dành chỗ cho
-nhật ký. Thông báo có thể đóng. App vẫn hỗ trợ ZIP portable của release cũ.
-Lỗi kiểm tra cập nhật không chặn tải hóa đơn/chuyển XML offline.
-
-Nguồn phiên bản là `app-version.json`, đồng bộ vào metadata EXE. Khi phát hành,
-đính kèm file `HDDT-Downloader-vX.Y.Z-windows.exe` vào GitHub Release có tag
-`vX.Y.Z` tương ứng. Checksum SHA-256 của asset được kiểm tra nếu API GitHub
-cung cấp. Không gửi tài khoản/mật khẩu/token GDT đến GitHub.
-
-Kiểm thử phần cập nhật và bản EXE (dữ liệu giả, không gọi GDT):
-
-```powershell
-powershell -NoProfile -File tests/Run-UpdateTests.ps1
-powershell -NoProfile -File tests/Run-SingleFileTests.ps1 -ExePath <duong-dan-exe>
-powershell -NoProfile -STA -File tests/Run-LayoutTests.ps1 -PreviewDirectory <thu-muc-anh>
-```
-
-Có thể chạy giao diện WPF bằng cách nhấn đúp **`run-gui.cmd`**, hoặc:
-
-```powershell
-powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\Start-HddtGui.ps1
-```
-
-- Tab **Tải từ GDT**: nhập tài khoản, mật khẩu, khoảng ngày và chiều hóa đơn.
-- Tab **XML có sẵn → Excel**: chọn thư mục XML để chuyển sang Excel offline.
-- Chọn file Excel đầu ra, bấm **Bắt đầu**, theo dõi tiến độ và nhật ký.
+- Tab **Tải từ GDT**: tải hóa đơn mua vào/bán ra rồi tạo Excel.
+- Tab **XML có sẵn → Excel**: chuyển thư mục XML offline, không cần Internet.
 - **Dừng an toàn** chờ request hiện tại và xuất phần dữ liệu đã xử lý. Đóng cửa
-  sổ khi đang chạy cũng yêu cầu dừng an toàn trước khi thoát.
-- **Nạp cấu hình .env** dùng cấu hình có sẵn, gồm các tùy chọn nâng cao; không
-  sửa file `.env`. Mật khẩu nhập trên giao diện không ghi ra file tạm.
-- **Cài đặt nâng cao** cho phép chỉnh số kết nối XML ban đầu/tối đa, giãn cách
-  request, thời gian phục hồi sau 429, giãn cách API danh sách, retry, timeout,
-  số hóa đơn mỗi trang, tự điều tiết danh sách và ghi nhật ký. Có nút khôi phục
-  mặc định; tham số được kiểm tra trước khi áp dụng cho lần chạy tiếp theo.
-- Bật **Ghi nhớ cho lần mở app sau** để lưu các tham số này vào
-  `hddt-settings.json` trong thư mục dữ liệu của app. File chỉ chứa tham số tải/nhật ký. Nếu không bật,
-  thay đổi chỉ dùng trong phiên hiện tại; muốn lưu thì thư mục app cần có quyền
-  ghi. Nạp `.env` sau đó sẽ ưu tiên giá trị trong `.env` cho phiên hiện tại.
+  sổ khi đang chạy cũng yêu cầu dừng an toàn.
+- **Nạp cấu hình .env** dùng cấu hình có sẵn, không sửa file `.env`.
+- **Cài đặt nâng cao**: số kết nối XML ban đầu/tối đa, giãn cách request, thời
+  gian phục hồi sau 429, giãn cách API danh sách, retry, timeout, số hóa đơn
+  mỗi trang, tự điều tiết danh sách và ghi nhật ký. Tham số được kiểm tra trước
+  khi áp dụng; có nút khôi phục mặc định.
+- Bật **Ghi nhớ cho lần mở app sau** để lưu tham số vào `hddt-settings.json`;
+  nạp `.env` sau đó sẽ ưu tiên giá trị trong `.env` cho phiên hiện tại.
 - Giao diện luôn từ chối ghi đè Excel đã có, kể cả khi `.env` đặt
-  `OVERWRITE_OUTPUT=true`. Tên đầu ra mặc định có thời điểm chạy.
+  `OVERWRITE_OUTPUT=true`; tên đầu ra mặc định kèm thời điểm chạy.
 
-Giao diện dùng WPF/.NET Framework và Windows PowerShell 5.1 có sẵn trên Windows;
-không cần PowerShell 7 hoặc thư viện ngoài. Không cần cài Excel để tạo `.xlsx`.
-Giao diện chỉ dành cho Windows; các lệnh CLI bên dưới tiếp tục dùng được trên
-Windows, macOS và Linux.
+App dùng WPF/.NET Framework, chỉ chạy trên Windows. Các lệnh CLI bên dưới vẫn
+dùng được trên Windows, macOS và Linux.
 
-Để tạo app portable với launcher **`HDDT-Downloader.exe`**:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-WindowsApp.ps1
-```
-
-Script in đường dẫn một EXE trong thư mục build mới ở `work/desktop/`.
-Chỉ cần sao chép file EXE đó để sử dụng hoặc chia sẻ. Build dùng danh sách
-mã nguồn tường minh, không kèm `.env`, cấu hình cá nhân hoặc hóa đơn.
-
-Nếu cần gói thư mục/ZIP kiểu cũ để phát triển hoặc hỗ trợ release trước:
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-WindowsApp.ps1 -FolderBundle
-```
-
-Bản chạy từ source hoặc `-FolderBundle` tiếp tục dùng cấu hình/output cạnh
-script như trước. Dữ liệu ở các bản portable cũ được giữ nguyên; có thể nạp
-lại `.env` hoặc chọn các thư mục dữ liệu cũ trên giao diện.
-
-Kiểm thử giao diện và luồng offline (không dùng tài khoản GDT):
-
-```powershell
-powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\tests\Run-DesktopTests.ps1
-```
-
-### Bước 1 — Tải mã nguồn
+### Cách B — CLI với `.env`
 
 ```bat
 git clone https://github.com/dieutx/hddt-downloader-windows.git
@@ -122,9 +80,7 @@ cd hddt-downloader-windows
 copy .env.example .env
 ```
 
-### Bước 2 — Điền thông tin
-
-Mở `.env` và sửa các dòng cần thiết:
+Mở `.env`, điền các giá trị cần thiết (4 dòng đầu là bắt buộc):
 
 ```dotenv
 GDT_USERNAME=0123456789
@@ -134,95 +90,125 @@ TO_DATE=01/01/2026
 INVOICE_DIRECTION=both
 ```
 
-| Biến | Ý nghĩa |
+Rồi nhấn đúp `run.cmd`. Chương trình tự lấy CAPTCHA, đăng nhập, tải danh sách
+hóa đơn, tải XML và tạo Excel.
+
+Không muốn sửa `.env`? Chạy `run-interactive.cmd` để nhập trực tiếp tài khoản,
+mật khẩu (chế độ bí mật), khoảng ngày, chiều hóa đơn, thư mục đầu ra và proxy.
+Nhập `CLEAR` ở ô proxy để tắt proxy.
+
+---
+
+## 2. App EXE: dữ liệu, cấu hình, cập nhật
+
+| Loại | Vị trí mặc định |
 |---|---|
-| `GDT_USERNAME` | Mã số thuế tài khoản GDT |
-| `GDT_PASSWORD` | Mật khẩu GDT |
-| `FROM_DATE`, `TO_DATE` | Khoảng ngày lập hóa đơn, định dạng `dd/MM/yyyy` |
-| `INVOICE_DIRECTION` | `purchase` = mua vào, `sold` = bán ra, `both` = cả hai |
+| Excel/XML/log | `Documents\HDDT-Downloader` (đổi được trên giao diện) |
+| Cấu hình tải/nhật ký | `%LOCALAPPDATA%\HDDT-Downloader\hddt-settings.json` |
+| Mã chương trình | `%TEMP%\HDDT-Downloader\run-<id>` — EXE tự nạp khi chạy và dọn khi thoát bình thường |
 
-### Bước 3 — Chạy
+`hddt-settings.json` chỉ chứa tham số tải/nhật ký (không lưu mật khẩu) và dùng
+chung khi đổi tên, di chuyển hoặc chạy phiên bản EXE mới. Người dùng không cần
+thao tác với các file bên trong EXE.
 
-Nhấn đúp:
+**Cập nhật phiên bản:** app kiểm tra GitHub Releases bằng tác vụ nền khi mở và
+qua nút **Cập nhật**. Khi có bản mới, bấm **Tải bản mới**, chọn nơi lưu rồi mở
+EXE vừa tải (không cần giải nén). Nội dung thay đổi xem bằng **Chi tiết** hoặc
+chỉ báo **Bản mới** trên header; màn hình thấp dùng chỉ báo header để dành chỗ
+cho nhật ký. Lỗi kiểm tra cập nhật không chặn tải hóa đơn hoặc chuyển XML
+offline, và app vẫn hỗ trợ ZIP portable của các release cũ.
+
+Bản portable cũ giữ nguyên dữ liệu; có thể nạp lại `.env` hoặc chọn thư mục dữ
+liệu cũ trên giao diện.
+
+---
+
+## 3. Kết quả Excel
+
+File mặc định nằm trong `output/`:
 
 ```text
-run.cmd
+output/
+  HoaDonDienTu.xlsx
+  xml/
+    purchase/
+    sold/
+  logs/
 ```
 
-Chương trình tự lấy CAPTCHA, đăng nhập, tải danh sách hóa đơn, tải XML và tạo Excel.
+Workbook gồm 8 sheet, không có VBA, `MENU` hay `Thamkhao`:
+
+| # | Sheet | Nội dung |
+|---|---|---|
+| 1 | `TongHopHD_Mua` | Tổng hợp hóa đơn mua vào |
+| 2 | `ChiTietHD_Mua` | Chi tiết dữ liệu mua vào |
+| 3 | `ChiTietHD_Mua_XML` | Chi tiết đọc trực tiếp từ XML mua vào |
+| 4 | `TongHopHD_Ban` | Tổng hợp hóa đơn bán ra |
+| 5 | `ChiTietHD_Ban` | Chi tiết dữ liệu bán ra |
+| 6 | `ChiTietHD_Ban_XML` | Chi tiết đọc trực tiếp từ XML bán ra |
+| 7 | `BaoCao_LoiTaiHD` | Lỗi tải/parse và kết quả xử lý |
+| 8 | `LinkTraCuu` | Bảng định tuyến link tra cứu hóa đơn |
+
+Sheet chi tiết theo bố cục v6.7.4 của bản gốc: cột 1 là `Mẫu số hóa đơn`, tiếp
+theo là thông tin chung rồi tới từng dòng hàng hóa (34 cột). Mẫu số và MST
+người bán/mua ghi dạng Text để giữ số `0` ở đầu. JSON được đọc từ byte UTF-8 gốc
+nên tiếng Việt đúng trên PowerShell 5.1; workbook dùng font Calibri.
+
+**Phục hồi khi XML lỗi.** Nếu tải XML gặp HTTP 500, chương trình tự gọi
+`/api/query/invoices/detail` bằng token của phiên đang chạy. Lấy được chi tiết
+thì dữ liệu vào các sheet `TongHopHD_*` và `ChiTietHD_*`, và `BaoCao_LoiTaiHD`
+ghi `Da lay du lieu tu API detail`. Trường API trả `null` được giữ trống hoặc
+giữ giá trị đã có từ danh sách; chương trình không tự suy ra số lượng, đơn giá
+hay tạo XML thay thế. Hai sheet `_XML` chỉ chứa dữ liệu đọc từ XML thật.
+
+### Link tra cứu hóa đơn
+
+Cột **Link tra cứu** (cột 55) và **Mã tra cứu** (cột 56) của
+`TongHopHD_Mua`/`TongHopHD_Ban` được sinh từ sheet `LinkTraCuu`:
+
+| Cột | Ý nghĩa |
+|---|---|
+| A | Tên tổ chức |
+| B | MST nhà cung cấp dịch vụ T-VAN (MSTTCGP) |
+| C | MST người bán cần link riêng (ưu tiên hơn link chung) |
+| D | Link tra cứu |
+| E | Tên trường trong `TTKhac` chứa mã tra cứu |
+| F | Ghi chú |
+
+Thứ tự ưu tiên: (1) `MSTTCGP` do GDT trả về hoặc `TTChung/MSTTCGP` trong XML;
+(2) nếu không có, tra MST người bán/người mua trong bảng `LinkTraCuu`; (3) không
+tra được thì ghi `Khong co link tra cuu`, đúng như bản gốc.
+
+Muốn tự thêm/sửa link (nhà cung cấp mới, MST chi nhánh): mở file Excel đã xuất,
+sửa sheet `LinkTraCuu`, lưu lại rồi trỏ biến sau vào file đó:
+
+```dotenv
+LOOKUP_TABLE_XLSX=output/HoaDonDienTu.xlsx
+```
+
+Các dòng trong bảng đó được nối vào bảng gốc (dòng cuối thắng) rồi ghi lại vào
+workbook lần chạy tiếp theo, nên sửa bao nhiêu lần cũng không nhân bản bảng.
+Chỉ URL HTTP/HTTPS hợp lệ mới có hyperlink; URL mẫu chưa ghép MST hoặc URL
+không hợp lệ được giữ dưới dạng chữ.
 
 ---
 
-## 2. Chế độ nhập trực tiếp
+## 4. Cấu hình `.env`
 
-Nếu không muốn chỉnh `.env`, chạy:
+Xem toàn bộ biến và giá trị mặc định trong [`.env.example`](.env.example).
 
-```text
-run-interactive.cmd
-```
-
-Chương trình sẽ hỏi:
-
-1. Tài khoản và mật khẩu GDT.
-2. Khoảng ngày và chiều hóa đơn.
-3. Thư mục/file Excel đầu ra.
-4. Có dùng proxy hay không.
-
-Mật khẩu được nhập ở chế độ bí mật, không hiển thị trên màn hình và không ghi đè `.env`.
-Nhập `CLEAR` ở ô proxy nếu muốn tắt proxy.
+| Nhóm | Biến chính |
+|---|---|
+| Đăng nhập | `GDT_USERNAME`, `GDT_PASSWORD`, `PROXY_URL`, `PROXY_USERNAME`, `PROXY_PASSWORD` |
+| Phạm vi | `INVOICE_DIRECTION` (`purchase`/`sold`/`both`), `FROM_DATE`, `TO_DATE` (`dd/MM/yyyy`), `INCLUDE_REGULAR`, `INCLUDE_SCO`, `FETCH_RELATED` |
+| Đầu ra | `OUTPUT_DIR`, `OUTPUT_XLSX`, `OVERWRITE_OUTPUT`, `REDOWNLOAD_XML`, `LOOKUP_TABLE_XLSX` |
+| Mạng | `PAGE_SIZE`, `REQUEST_DELAY_MS`, `ADAPTIVE_THROTTLE`, `MAX_RETRIES`, `HTTP_TIMEOUT_SECONDS`, `XML_CONCURRENCY`, `XML_MAX_CONCURRENCY`, `XML_REQUEST_INTERVAL_MS`, `XML_RECOVERY_STEP_SECONDS`, `BROWSER_USER_AGENT` |
+| Nhật ký | `LOG_LEVEL`, `LOG_TO_FILE`, `LOG_HTTP_PROFILE`, `PROGRESS_EVERY` |
+| XML có sẵn | `LOCAL_XML_DIR`, `LOCAL_DIRECTION`, `LOCAL_OUTPUT_XLSX` |
 
 ---
 
-## 3. Chạy trên Linux / macOS
-
-Cần PowerShell 7 trở lên.
-
-### macOS — bản preview
-
-```bash
-brew install --cask powershell@preview
-pwsh-preview --version
-```
-
-Bản preview dùng lệnh **`pwsh-preview`**.
-
-### Ubuntu / Debian
-
-Cài PowerShell 7 ổn định từ kho Microsoft:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y wget apt-transport-https software-properties-common
-
-. /etc/os-release
-wget -q "https://packages.microsoft.com/config/$ID/$VERSION_ID/packages-microsoft-prod.deb"
-sudo dpkg -i packages-microsoft-prod.deb
-rm packages-microsoft-prod.deb
-
-sudo apt-get update
-sudo apt-get install -y powershell
-pwsh --version
-```
-
-Lệnh `pwsh --version` phải trả về số phiên bản PowerShell 7 trở lên. Nếu dùng bản preview trên Linux, lệnh tương ứng là `pwsh-preview --version`.
-
-Các bản phân phối khác: xem [hướng dẫn cài PowerShell trên Linux](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-linux).
-
-### Chạy chương trình
-
-```bash
-# Linux hoặc bản PowerShell ổn định
-pwsh -NoProfile -File Invoke-Hddt.ps1
-pwsh -NoProfile -File Invoke-Hddt.ps1 -Interactive
-
-# macOS bản preview
-pwsh-preview -NoProfile -File Invoke-Hddt.ps1
-pwsh-preview -NoProfile -File Invoke-Hddt.ps1 -Interactive
-```
-
----
-
-## 4. Dùng proxy
+## 5. Proxy
 
 Nếu GDT không truy cập được từ IP hiện tại, thêm vào `.env`:
 
@@ -240,183 +226,145 @@ PROXY_USERNAME=proxy-user
 PROXY_PASSWORD=proxy-password
 ```
 
-Cũng có thể dùng dạng rút gọn trong `PROXY_URL`:
-
-```text
-host:port:username:password
-```
-
-Nên tách username/password vào hai biến riêng để không làm lộ mật khẩu trong URL. Proxy được áp dụng cho đăng nhập, danh sách, related và tải XML.
+Cũng có thể dùng dạng rút gọn `host:port:username:password` trong `PROXY_URL`,
+nhưng nên tách username/password vào hai biến riêng để không lộ mật khẩu trong
+URL. Proxy được áp dụng cho đăng nhập, danh sách, related và tải XML.
 
 ---
 
-## 5. Kết quả xuất
+## 6. Chuyển XML có sẵn sang Excel
 
-File mặc định nằm trong `output/`:
-
-```text
-output/
-  HoaDonDienTu.xlsx
-  xml/
-    purchase/
-    sold/
-  logs/
-```
-
-Workbook gồm 8 sheet:
-
-| Sheet | Nội dung |
-|---|---|
-| `TongHopHD_Mua` | Tổng hợp hóa đơn mua vào |
-| `ChiTietHD_Mua` | Chi tiết dữ liệu mua vào |
-| `ChiTietHD_Mua_XML` | Chi tiết đọc trực tiếp từ XML mua vào |
-| `TongHopHD_Ban` | Tổng hợp hóa đơn bán ra |
-| `ChiTietHD_Ban` | Chi tiết dữ liệu bán ra |
-| `ChiTietHD_Ban_XML` | Chi tiết đọc trực tiếp từ XML bán ra |
-| `BaoCao_LoiTaiHD` | Các lỗi tải/parse và kết quả xử lý |
-| `LinkTraCuu` | Bảng định tuyến link tra cứu hóa đơn |
-
-File Excel không có VBA, `MENU` hay `Thamkhao`.
-
-Khi tải XML gặp HTTP 500, chương trình tự gọi `/api/query/invoices/detail`
-bằng token của phiên đăng nhập hiện tại. Nếu lấy được chi tiết, dữ liệu được
-ghi vào `TongHopHD_Mua`/`TongHopHD_Ban` và `ChiTietHD_Mua`/`ChiTietHD_Ban`.
-Các trường API trả `null` được giữ trống hoặc giữ giá trị đã có từ danh sách;
-không tự suy ra số lượng, đơn giá hay tạo XML thay thế. Hai sheet `_XML` chỉ
-chứa dữ liệu đọc từ XML thật.
-
-`BaoCao_LoiTaiHD` vẫn ghi nhận XML HTTP 500, nhưng kết quả cuối là
-`Da lay du lieu tu API detail` khi đã bổ sung dữ liệu thành công. Nếu API detail
-cũng lỗi, dòng tổng hợp từ danh sách vẫn được giữ cùng thông báo lỗi chi tiết.
-Không cần nhập token/cookie hoặc bật thêm tùy chọn.
-
-JSON được đọc từ byte UTF-8 gốc để giữ đúng tiếng Việt trên PowerShell 5.1;
-workbook dùng font Calibri. URL mẫu chưa ghép MST hoặc URL không hợp lệ trong
-`LinkTraCuu` được giữ dưới dạng chữ, chỉ URL HTTP/HTTPS hợp lệ mới có hyperlink.
-
-Sheet chi tiết `ChiTietHD_Mua`/`ChiTietHD_Ban` theo bố cục v6.7.4 của bản gốc: cột 1 là `Mẫu số hóa đơn`, tiếp theo là thông tin chung rồi tới từng dòng hàng hóa (34 cột). Mẫu số và MST người bán/mua được ghi dạng Text để giữ số `0` ở đầu.
-
-### Link tra cứu hóa đơn
-
-Cột **Link tra cứu** (cột 55) và **Mã tra cứu** (cột 56) của `TongHopHD_Mua`/`TongHopHD_Ban` được sinh từ sheet `LinkTraCuu`:
-
-| Cột | Ý nghĩa |
-|---|---|
-| A | Tên tổ chức |
-| B | MST nhà cung cấp dịch vụ T-VAN (MSTTCGP) |
-| C | MST người bán cần link riêng (ưu tiên hơn link chung) |
-| D | Link tra cứu |
-| E | Tên trường trong `TTKhac` chứa mã tra cứu |
-| F | Ghi chú |
-
-Thứ tự ưu tiên khi sinh link:
-
-1. `MSTTCGP` do GDT trả về, hoặc `TTChung/MSTTCGP` trong XML.
-2. Nếu không có, tra MST của người bán/người mua trong bảng `LinkTraCuu`: hóa đơn phát hành trực tiếp qua MSSVĐHĐN thường không có MSTTCGP, nhưng bên kia vẫn có thể là một nhà cung cấp có trong bảng.
-3. Không tra được thì ghi `Khong co link tra cuu`, đúng như bản gốc.
-
-Muốn tự thêm/sửa link (nhà cung cấp mới, hoặc MST chi nhánh), mở file Excel đã xuất, sửa sheet `LinkTraCuu`, lưu lại rồi trỏ biến sau vào file đó:
-
-```dotenv
-LOOKUP_TABLE_XLSX=output/HoaDonDienTu.xlsx
-```
-
-Các dòng trong bảng đó được nối vào bảng gốc (dòng cuối thắng) rồi ghi lại vào workbook của lần chạy tiếp theo, nên sửa bao nhiêu lần cũng không nhân bản bảng.
-
----
-
-## 6. Parse XML có sẵn
-
-Không cần tài khoản hoặc Internet khi đã có sẵn file XML.
-
-Đặt `LOCAL_XML_DIR` trong `.env`, sau đó chạy:
+Không cần tài khoản GDT hay Internet khi đã có XML. Đặt `LOCAL_XML_DIR` trong
+`.env` rồi chạy:
 
 ```bat
 parse-local.cmd
 ```
 
-Hoặc nhập trực tiếp:
-
-```bat
-parse-local-interactive.cmd
-```
-
-Trên Linux/macOS dùng `pwsh -NoProfile -File Parse-LocalXml.ps1` (hoặc `pwsh-preview` trên macOS preview).
+Hoặc nhập trực tiếp bằng `parse-local-interactive.cmd`. Trên Linux/macOS dùng
+`pwsh -NoProfile -File Parse-LocalXml.ps1`.
 
 ---
 
-## 7. Một số tuỳ chọn thường dùng
+## 7. Linux / macOS
 
-| Biến | Ý nghĩa |
-|---|---|
-| `INCLUDE_REGULAR` | Lấy hóa đơn thông thường |
-| `INCLUDE_SCO` | Lấy hóa đơn máy tính tiền |
-| `FETCH_RELATED` | Lấy chuỗi hóa đơn thay thế/điều chỉnh |
-| `REDOWNLOAD_XML` | Tái sử dụng XML đã tải hoặc tải lại |
-| `OVERWRITE_OUTPUT` | Ghi đè file Excel đã có |
-| `LOOKUP_TABLE_XLSX` | Workbook `.xlsx` có sheet `LinkTraCuu` dùng để tra link tra cứu |
-| `REQUEST_DELAY_MS` | Nghỉ giữa các request |
-| `MAX_RETRIES` | Số lần thử lại lỗi mạng/5xx |
-| `HTTP_TIMEOUT_SECONDS` | Thời gian chờ một request |
-| `XML_CONCURRENCY` | Số kết nối tải XML chạy song song (1-10, mặc định 4) |
-| `XML_MAX_CONCURRENCY` | Trần kết nối và số worker tải XML (mặc định 4) |
-| `XML_REQUEST_INTERVAL_MS` | Giãn cách giữa hai request XML (mặc định 800 ms) |
-| `XML_RECOVERY_STEP_SECONDS` | Khoảng im 429 mỗi bước phục hồi (mặc định 10 giây) |
-| `BROWSER_USER_AGENT` | User-Agent gửi kèm; để trống dùng mặc định của trình duyệt |
-| `LOG_HTTP_PROFILE` | In log nhóm header an toàn của request để chẩn đoán |
+Cần PowerShell 7 trở lên.
 
-Xem toàn bộ tuỳ chọn trong `.env.example`.
+```bash
+# Ubuntu / Debian
+sudo apt-get update
+sudo apt-get install -y wget apt-transport-https software-properties-common
+. /etc/os-release
+wget -q "https://packages.microsoft.com/config/$ID/$VERSION_ID/packages-microsoft-prod.deb"
+sudo dpkg -i packages-microsoft-prod.deb && rm packages-microsoft-prod.deb
+sudo apt-get update && sudo apt-get install -y powershell
+pwsh --version
+```
+
+macOS bản preview: `brew install --cask powershell@preview` (lệnh là
+`pwsh-preview`). Bản phân phối khác xem
+[hướng dẫn cài PowerShell trên Linux](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-linux).
+
+```bash
+pwsh -NoProfile -File Invoke-Hddt.ps1              # chạy theo .env
+pwsh -NoProfile -File Invoke-Hddt.ps1 -Interactive # nhập trực tiếp
+```
+
+---
+
+## 8. Cơ chế tải XML và xử lý lỗi
 
 Tải XML chạy theo pipeline: `XML_MAX_CONCURRENCY` worker cùng lúc, mỗi request
 chờ `XML_REQUEST_INTERVAL_MS`. Log ghi rõ số worker được mở, mỗi worker nhận
 hóa đơn nào (`Worker x/y nhận hóa đơn i/n: ...`) và mỗi dòng tiến độ cho biết
-worker nào vừa xong cùng số worker đang chạy (`Worker x/y | đang chạy z/y`).
-Bị HTTP 429 thì hệ thống nghỉ theo `Retry-After`, giảm một kết nối (tối đa một lần mỗi
-30s để một hóa đơn retry không kéo tụt cả pool) và tăng khoảng cách; khi đã im
-429 đủ lâu (`XML_RECOVERY_STEP_SECONDS`, mặc định 10s mỗi bước), khoảng cách
-được giảm một nửa về mức `XML_REQUEST_INTERVAL_MS` rồi mới tăng lại kết nối,
-không bao giờ vượt `XML_MAX_CONCURRENCY`. Chạy với `XML_CONCURRENCY=1` để giữ
-hành vi tuần tự cũ.
+worker vừa xong cùng số worker đang chạy.
+
+Gặp HTTP 429, hệ thống nghỉ theo `Retry-After`, giảm một kết nối (tối đa một
+lần mỗi 30 giây để một hóa đơn retry không kéo tụt cả pool) và tăng khoảng
+cách. Khi đã im 429 đủ lâu (`XML_RECOVERY_STEP_SECONDS`, mặc định 10 giây mỗi
+bước), khoảng cách giảm một nửa về mức `XML_REQUEST_INTERVAL_MS` rồi mới tăng
+lại kết nối — không bao giờ vượt `XML_MAX_CONCURRENCY`. Đặt
+`XML_CONCURRENCY=1` để giữ hành vi tuần tự.
+
+| Tình huống | Xử lý |
+|---|---|
+| XML trả HTTP 500 | Thử lấy dữ liệu bằng API detail; kết quả cuối ghi trong `BaoCao_LoiTaiHD` |
+| XML trả HTTP 504 hoặc lỗi parse | Ghi vào `BaoCao_LoiTaiHD`, tiếp tục phần còn lại |
+| Đăng nhập HTTP 401 | CAPTCHA đã đọc; kiểm tra `GDT_USERNAME`, `GDT_PASSWORD`, quyền tài khoản và proxy |
+| Nhấn `Ctrl+C` một lần | Dừng sau request hiện tại, vẫn xuất Excel phần đã tải |
+| Không lấy được hóa đơn nào | Vẫn tạo workbook lỗi, chương trình trả mã thoát `2` |
 
 ---
 
-## 8. Lỗi và tạm dừng
+## 9. Build và phát hành
 
-- XML HTTP 500 được thử lấy dữ liệu bằng API detail; HTTP 504 và lỗi parse vẫn được ghi vào `BaoCao_LoiTaiHD`. Chương trình tiếp tục xử lý phần còn lại.
-- Nếu đăng nhập báo HTTP 401, CAPTCHA đã được đọc; hãy kiểm tra `GDT_USERNAME`, `GDT_PASSWORD`, quyền truy cập tài khoản và proxy trong `.env`.
-- Nhấn `Ctrl+C` một lần để dừng sau request hiện tại; dữ liệu đã tải vẫn được xuất Excel.
-- Nếu không lấy được hóa đơn nào, workbook lỗi vẫn được tạo và chương trình trả mã thoát `2`.
-
----
-
-## 9. Kiểm thử offline
-
-Không cần tài khoản GDT:
+Tạo một EXE duy nhất (`work/desktop/`):
 
 ```powershell
-# Windows
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-Tests.ps1
-
-# Linux / macOS bản ổn định
-pwsh -NoProfile -File tests/Run-Tests.ps1
-
-# macOS bản preview
-pwsh-preview -NoProfile -File tests/Run-Tests.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-WindowsApp.ps1
 ```
 
+Script in đường dẫn EXE; chỉ cần sao chép file đó để dùng hoặc chia sẻ. Build
+dùng danh sách mã nguồn tường minh, không kèm `.env`, cấu hình cá nhân hay hóa
+đơn. Nếu cần gói thư mục/ZIP portable kiểu cũ:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-WindowsApp.ps1 -FolderBundle
+```
+
+Bản chạy từ source hoặc `-FolderBundle` dùng cấu hình/output cạnh script như
+trước. Chạy giao diện trực tiếp từ mã nguồn bằng `run-gui.cmd` hoặc:
+
+```powershell
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\Start-HddtGui.ps1
+```
+
+**Checklist phát hành:** cập nhật `app-version.json` (nguồn phiên bản, đồng bộ
+vào metadata EXE) → build EXE → chạy kiểm thử → tạo GitHub Release tag `vX.Y.Z`
+→ đính kèm `HDDT-Downloader-vX.Y.Z-windows.exe` kèm file checksum SHA-256 →
+tải lại asset từ GitHub để xác nhận size/checksum. Không đẩy tài khoản, mật
+khẩu hay token GDT lên GitHub.
+
 ---
 
-## Bảo mật
+## 10. Kiểm thử
 
-- `.env` đã được Git bỏ qua; không commit mật khẩu hoặc dữ liệu hóa đơn thật.
-- Mật khẩu không được ghi vào log hoặc file Excel.
-- Token đăng nhập chỉ được tạo tự động trong bộ nhớ khi chương trình chạy; người dùng không cần nhập token.
+Toàn bộ kiểm thử chạy offline, không cần tài khoản GDT:
 
-Chi tiết ở `SECURITY.md`.
+```powershell
+# Lõi: parse XML, xuất Excel/OPC, phân trang, backoff 429
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-Tests.ps1
+
+# Giao diện WPF và luồng offline
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -File .\tests\Run-DesktopTests.ps1
+
+# Luồng cập nhật và EXE một file (truyền đường dẫn EXE)
+powershell.exe -NoProfile -File tests/Run-UpdateTests.ps1
+powershell.exe -NoProfile -File tests/Run-SingleFileTests.ps1 -ExePath <duong-dan-exe>
+
+# Bố cục theo kích thước/DPI (xuất ảnh preview để kiểm tra)
+powershell.exe -NoProfile -STA -File tests/Run-LayoutTests.ps1 -PreviewDirectory <thu-muc-anh>
+```
+
+Linux/macOS dùng `pwsh -NoProfile -File tests/Run-Tests.ps1` (macOS preview dùng
+`pwsh-preview`). Script in `All tests passed.` khi đạt và tự dừng với thông báo
+`FAILED:` khi lệch.
 
 ---
 
-## Đóng góp
+## 11. Bảo mật
+
+- `.env` đã được Git bỏ qua; không commit mật khẩu, token, cookie hay dữ liệu
+  hóa đơn thật.
+- Mật khẩu không được ghi vào log, file Excel hay file tạm.
+- Token đăng nhập chỉ tồn tại trong bộ nhớ phiên chạy; người dùng không cần
+  nhập token.
+
+Chi tiết ở [`SECURITY.md`](SECURITY.md).
+
+---
+
+## 12. Đóng góp
 
 | Tài liệu | Dành cho |
 |---|---|
