@@ -67,8 +67,10 @@ trong panel nhỏ; chuyển tab giữ nguyên dữ liệu đã nhập.
   khi áp dụng; có nút khôi phục mặc định.
 - Bật **Ghi nhớ cho lần mở app sau** để lưu tham số vào `hddt-settings.json`;
   nạp `.env` sau đó sẽ ưu tiên giá trị trong `.env` cho phiên hiện tại.
-- Giao diện luôn từ chối ghi đè Excel đã có, kể cả khi `.env` đặt
-  `OVERWRITE_OUTPUT=true`; tên đầu ra mặc định kèm thời điểm chạy.
+- **Ghi tiếp vào file đã chọn** (mặc định bật): trỏ vào file Excel đã có là hóa
+  đơn mới được nối thêm vào đúng file đó, không bắt đổi tên. Bỏ tick thì giao
+  diện từ chối ghi đè như trước, kể cả khi `.env` đặt `OVERWRITE_OUTPUT=true`.
+  Tên đầu ra mặc định là `HoaDonDienTu.xlsx` trong thư mục đã chọn.
 
 App dùng WPF/.NET Framework, chỉ chạy trên Windows. Các lệnh CLI bên dưới vẫn
 dùng được trên Windows, macOS và Linux.
@@ -190,6 +192,27 @@ theo là thông tin chung rồi tới từng dòng hàng hóa (34 cột). Mẫu 
 người bán/mua ghi dạng Text để giữ số `0` ở đầu. JSON được đọc từ byte UTF-8 gốc
 nên tiếng Việt đúng trên PowerShell 5.1; workbook dùng font Calibri.
 
+### Ghi tiếp vào một file Excel duy nhất
+
+Không cần tạo file mới cho mỗi lần chạy. Trong giao diện, tick **Ghi tiếp vào
+file đã chọn** (mặc định bật) rồi trỏ vào file Excel đã có; với CLI/.env đặt
+`APPEND_OUTPUT=true` (chỉ dùng một trong hai với `OVERWRITE_OUTPUT`).
+
+Cách trộn theo hóa đơn:
+
+- Khóa hóa đơn là **mẫu số + ký hiệu + số hóa đơn + ngày lập + MST người bán +
+  MST người mua**. Hóa đơn đã có trong file được **thay bằng dữ liệu mới**,
+  hóa đơn khác giữ nguyên và hóa đơn mới được nối vào cuối. Vì vậy resume, chạy
+  lại cùng kỳ, đổi kỳ hay tách riêng mua vào/bán ra đều dùng chung một file mà
+  không nhân đôi dữ liệu.
+- Dòng lỗi trong `BaoCao_LoiTaiHD` của hóa đơn được xử lý lại lần này bị thay
+  bằng kết quả mới, kể cả khi lần này hóa đơn đó thành công.
+- Bảng `LinkTraCuu` trong file đang ghi tiếp được nạp lại trước khi xuất, nên
+  dòng MST/link bạn tự sửa trong file đó được giữ nguyên.
+- Cột `STT` của sheet tổng hợp và báo cáo lỗi được đánh lại liên tục sau khi trộn.
+- Không bật ghi tiếp mà file đã tồn tại thì chương trình vẫn từ chối ghi, để
+  không làm mất dữ liệu cũ.
+
 **Phục hồi khi XML lỗi.** Nếu tải XML gặp HTTP 500, chương trình tự gọi
 `/api/query/invoices/detail` bằng token của phiên đang chạy. Lấy được chi tiết
 thì dữ liệu vào các sheet `TongHopHD_*` và `ChiTietHD_*`, và `BaoCao_LoiTaiHD`
@@ -237,7 +260,7 @@ Xem toàn bộ biến và giá trị mặc định trong [`.env.example`](.env.e
 |---|---|
 | Đăng nhập | `GDT_USERNAME`, `GDT_PASSWORD`, `PROXY_URL`, `PROXY_USERNAME`, `PROXY_PASSWORD` |
 | Phạm vi | `INVOICE_DIRECTION` (`purchase`/`sold`/`both`), `FROM_DATE`, `TO_DATE` (`dd/MM/yyyy`), `INCLUDE_REGULAR`, `INCLUDE_SCO`, `FETCH_RELATED` |
-| Đầu ra | `OUTPUT_DIR`, `OUTPUT_XLSX`, `OVERWRITE_OUTPUT`, `REDOWNLOAD_XML`, `LOOKUP_TABLE_XLSX` |
+| Đầu ra | `OUTPUT_DIR`, `OUTPUT_XLSX`, `OVERWRITE_OUTPUT`, `APPEND_OUTPUT`, `REDOWNLOAD_XML`, `LOOKUP_TABLE_XLSX` |
 | Mạng | `PAGE_SIZE`, `REQUEST_DELAY_MS`, `ADAPTIVE_THROTTLE`, `MAX_RETRIES`, `HTTP_TIMEOUT_SECONDS`, `XML_CONCURRENCY`, `XML_MAX_CONCURRENCY`, `XML_REQUEST_INTERVAL_MS`, `XML_RECOVERY_STEP_SECONDS`, `BROWSER_USER_AGENT` |
 | Nhật ký | `LOG_LEVEL`, `LOG_TO_FILE`, `LOG_HTTP_PROFILE`, `PROGRESS_EVERY` |
 | XML có sẵn | `LOCAL_XML_DIR`, `LOCAL_DIRECTION`, `LOCAL_OUTPUT_XLSX` |

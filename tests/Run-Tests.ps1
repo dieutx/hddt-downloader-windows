@@ -559,7 +559,7 @@ finally {
 # --- Interactive config: secure username/password prompts and no secret echo ---
 $tempInteractivePath = Join-Path ([IO.Path]::GetTempPath()) ('hddt-interactive-' + [guid]::NewGuid().ToString('N') + '.env')
 $script:InteractiveAnswers = [System.Collections.Queue]::new()
-foreach ($answer in @('interactive-user', 'interactive-pass', 'purchase', '01/09/2026', '30/09/2026', 'output', 'interactive.xlsx', 'true', 'false', 'false', 'false', 'true', 'http://proxy.example:8080', 'proxy-user', 'proxy-pass')) {
+foreach ($answer in @('interactive-user', 'interactive-pass', 'purchase', '01/09/2026', '30/09/2026', 'output', 'interactive.xlsx', 'true', 'false', 'false', 'false', 'false', 'true', 'http://proxy.example:8080', 'proxy-user', 'proxy-pass')) {
     $script:InteractiveAnswers.Enqueue([string]$answer)
 }
 $script:InteractivePrompts = New-Object System.Collections.Generic.List[string]
@@ -581,6 +581,8 @@ try {
     Assert-Equal 'interactive-user' $interactiveConfig.Username 'Interactive username is retained in memory'
     Assert-Equal 'interactive-pass' $interactiveConfig.Password 'Interactive password is retained in memory'
     Assert-Equal 'http://proxy.example:8080/' $interactiveConfig.ProxyUri.AbsoluteUri 'Interactive proxy URL is parsed'
+    Assert-Equal $false $interactiveConfig.OverwriteOutput 'Interactive overwrite flag is parsed'
+    Assert-Equal $true $interactiveConfig.AppendOutput 'Interactive append flag is parsed'
     Assert-Equal $false (($script:InteractivePrompts -join '|') -match 'interactive-pass') 'Interactive password is not echoed in a prompt'
     Assert-Equal $false (($script:InteractivePrompts -join '|') -match 'proxy-pass') 'Interactive proxy password is not echoed in a prompt'
 }
@@ -1876,6 +1878,144 @@ finally {
     $allowedDesktopPrefix = Join-Path ([IO.Path]::GetFullPath([IO.Path]::GetTempPath())) 'hddt-desktop-'
     if (-not $resolvedDesktopDirectory.StartsWith($allowedDesktopPrefix, [StringComparison]::OrdinalIgnoreCase)) { throw 'Thu muc kiem thu nam ngoai thu muc tam.' }
     if (Test-Path -LiteralPath $resolvedDesktopDirectory) { Remove-Item -LiteralPath $resolvedDesktopDirectory -Recurse -Force }
+}
+
+# --- Ghi tiếp vào file đã có: resume, tách mua/bán, đổi kỳ ---
+$appendWorkbook = Join-Path ([IO.Path]::GetTempPath()) ('hddt-append-' + [guid]::NewGuid().ToString('N') + '.xlsx')
+try {
+    $invoiceA = [pscustomobject]@{
+        Direction = 'purchase'; TemplateCode = '1'; InvoiceSeries = 'C26TABC'; InvoiceNumber = '1001'
+        InvoiceDate = [datetime]'2026-01-05'; Currency = 'VND'; ExchangeRate = 1
+        SellerName = 'Nguoi ban gia lap'; SellerTaxCode = '0100000001'
+        BuyerName = 'Nguoi mua gia lap'; BuyerTaxCode = '0200000002'
+        AmountBeforeTax = 1000; TaxAmount = 1000
+    }
+    $invoiceB = [pscustomobject]@{
+        Direction = 'purchase'; TemplateCode = '1'; InvoiceSeries = 'C26TABC'; InvoiceNumber = '1002'
+        InvoiceDate = [datetime]'2026-01-06'; Currency = 'VND'; ExchangeRate = 1
+        SellerName = 'Nguoi ban gia lap'; SellerTaxCode = '0100000001'
+        BuyerName = 'Nguoi mua gia lap'; BuyerTaxCode = '0200000002'
+        AmountBeforeTax = 2000; TaxAmount = 2000
+    }
+    $soldInvoice = [pscustomobject]@{
+        Direction = 'sold'; TemplateCode = '1'; InvoiceSeries = 'C26TABC'; InvoiceNumber = '2001'
+        InvoiceDate = [datetime]'2026-02-10'; Currency = 'VND'; ExchangeRate = 1
+        SellerName = 'Nguoi ban gia lap'; SellerTaxCode = '0200000002'
+        BuyerName = 'Nguoi mua gia lap'; BuyerTaxCode = '0300000003'
+        AmountBeforeTax = 3000; TaxAmount = 3000
+    }
+    $invoiceDetail = [pscustomobject]@{
+        Direction = 'purchase'; TemplateCode = '1'; InvoiceSeries = 'C26TABC'; InvoiceNumber = '1001'
+        InvoiceDate = [datetime]'2026-01-05'; SellerName = 'Nguoi ban gia lap'; SellerTaxCode = '0100000001'
+        BuyerName = 'Nguoi mua gia lap'; BuyerTaxCode = '0200000002'
+        LineNumber = '1'; Description = 'Hang gia lap A'; Unit = 'cai'; Quantity = 2; UnitPrice = 500
+        AmountBeforeTax = 1000; TaxAmount = 100; AmountWithTax = 1100; TaxRate = 0.1
+    }
+
+    $firstExport = Export-InvoiceWorkbook -Path $appendWorkbook -SummaryRows @($invoiceA) -DetailRows @($invoiceDetail) -ErrorRows @()
+    Assert-Equal $false $firstExport.AppendMode 'File moi khong o che do ghi tiep'
+
+    # Lan chay ban ra: du lieu mua vao cua lan truoc phai duoc giu nguyen.
+    $secondExport = Export-InvoiceWorkbook -Path $appendWorkbook -SummaryRows @($soldInvoice) -DetailRows @() -ErrorRows @() -Append
+    Assert-Equal $true $secondExport.AppendMode 'Lan sau ghi tiep vao file da co'
+    $purchaseRows = @(Read-ExcelWorksheetRows -Path $appendWorkbook -SheetName 'TongHopHD_Mua' -FirstDataRow 3 -LastColumn 58)
+    Assert-Equal 1 $purchaseRows.Count 'Hoa don mua cua lan truoc duoc giu lai'
+    $soldRows = @(Read-ExcelWorksheetRows -Path $appendWorkbook -SheetName 'TongHopHD_Ban' -FirstDataRow 3 -LastColumn 58)
+    Assert-Equal 1 $soldRows.Count 'Hoa don ban duoc ghi vao cung mot file'
+    $detailRows = @(Read-ExcelWorksheetRows -Path $appendWorkbook -SheetName 'ChiTietHD_Mua' -FirstDataRow 3 -LastColumn 34)
+    Assert-Equal 1 $detailRows.Count 'Dong chi tiet mua duoc giu lai'
+
+    # Chay lai dung hoa don cu voi so tien moi: thay dong cu, khong nhan doi.
+    $invoiceAAgain = [pscustomobject]@{
+        Direction = 'purchase'; TemplateCode = '1'; InvoiceSeries = 'C26TABC'; InvoiceNumber = '1001'
+        InvoiceDate = [datetime]'2026-01-05'; Currency = 'VND'; ExchangeRate = 1
+        SellerName = 'Nguoi ban gia lap'; SellerTaxCode = '0100000001'
+        BuyerName = 'Nguoi mua gia lap'; BuyerTaxCode = '0200000002'
+        AmountBeforeTax = 1500; TaxAmount = 1500
+    }
+    $thirdExport = Export-InvoiceWorkbook -Path $appendWorkbook -SummaryRows @($invoiceAAgain, $invoiceB) -DetailRows @() -ErrorRows @() -Append
+    Assert-Equal 1 $thirdExport.MergedReplacedRows 'Hoa don trung khoa bi thay thay vi them dong moi'
+    Assert-Equal 1 @(Read-ExcelWorksheetRows -Path $appendWorkbook -SheetName 'TongHopHD_Ban' -FirstDataRow 3 -LastColumn 58).Count 'Hoa don ban van con sau khi chay lai phan mua vao'
+    $purchaseRows = @(Read-ExcelWorksheetRows -Path $appendWorkbook -SheetName 'TongHopHD_Mua' -FirstDataRow 3 -LastColumn 58)
+    Assert-Equal 2 $purchaseRows.Count 'Chay lai cung ky khong nhan doi hoa don'
+    $firstNumbers = @()
+    $amounts = @()
+    foreach ($row in $purchaseRows) {
+        if ($row.Cells.ContainsKey(1)) { $firstNumbers += $row.Cells[1].Value }
+        if ($row.Cells.ContainsKey(42)) { $amounts += $row.Cells[42].Value }
+    }
+    Assert-Equal 1 $firstNumbers[0] 'STT duoc danh lai tu dau'
+    Assert-Equal 2 $firstNumbers[1] 'STT duoc danh lai lien tuc'
+    Assert-Equal 1 @($amounts | Where-Object { $_ -eq 1500 }).Count 'So tien moi cua hoa don trung duoc ghi'
+    Assert-Equal 0 @($amounts | Where-Object { $_ -eq 1000 }).Count 'So tien cu cua hoa don trung khong con'
+
+    # Người dùng tự thêm một dòng MST mới vào sheet LinkTraCuu của file đã xuất;
+    # khi ghi tiếp, dòng đó phải được giữ lại và không bị nhân đôi.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $lookupZip = [IO.Compression.ZipFile]::Open($appendWorkbook, [IO.Compression.ZipArchiveMode]::Update)
+    try {
+        $lookupEntry = $lookupZip.GetEntry('xl/worksheets/sheet8.xml')
+        $lookupReader = New-Object IO.StreamReader($lookupEntry.Open(), [Text.Encoding]::UTF8)
+        $lookupSheetText = $lookupReader.ReadToEnd()
+        $lookupReader.Dispose()
+        $customRow = '<row r="999"><c r="A999" t="inlineStr"><is><t>Nha cung cap gia lap</t></is></c>' +
+            '<c r="B999" t="inlineStr"><is><t>0999999999</t></is></c>' +
+            '<c r="D999" t="inlineStr"><is><t>https://tra-cuu.example/0999999999</t></is></c></row>'
+        Assert-Equal $true $lookupSheetText.Contains('</sheetData>') 'Sheet LinkTraCuu co sheetData de them dong'
+        $lookupSheetText = $lookupSheetText.Replace('</sheetData>', $customRow + '</sheetData>')
+        $lookupStream = $lookupEntry.Open()
+        $lookupStream.SetLength(0)
+        $lookupWriter = New-Object IO.StreamWriter($lookupStream, (New-Object Text.UTF8Encoding($false)))
+        $lookupWriter.Write($lookupSheetText)
+        $lookupWriter.Flush()
+        $lookupWriter.Dispose()
+        $lookupStream.Dispose()
+    }
+    finally { $lookupZip.Dispose() }
+
+    $null = Export-InvoiceWorkbook -Path $appendWorkbook -SummaryRows @($invoiceB) -DetailRows @() -ErrorRows @() -Append
+    $lookupRows = @(Read-ExcelWorksheetRows -Path $appendWorkbook -SheetName 'LinkTraCuu' -FirstDataRow 2 -LastColumn 15)
+    $customRows = @($lookupRows | Where-Object { $_.Cells.ContainsKey(2) -and (Get-ExcelMergeText $_.Cells[2].Value) -eq '0999999999' })
+    Assert-Equal 1 $customRows.Count 'Dong MST nguoi dung tu them duoc giu khi ghi tiep'
+    Assert-Equal 'https://tra-cuu.example/0999999999' (Get-ExcelMergeText $customRows[0].Cells[4].Value) 'Link nguoi dung tu them van con trong file'
+
+    # Bao cao loi cua hoa don da xu ly lai lan nay bi thay bang ket qua moi.
+    $errorRow = [pscustomobject]@{
+        Direction = 'purchase'; Source = 'query'; SellerTaxCode = '0100000001'
+        InvoiceTemplate = '1'; InvoiceSeries = 'C26TABC'; InvoiceNumber = '1002'; InvoiceDate = [datetime]'2026-01-06'
+        Stage = 'Tai XML'; Endpoint = '/fake.xml'; StatusCode = 504; Attempts = 1; RetryAfterSeconds = 0
+        Error = 'loi gia lap'; FinalResult = 'Khong tai duoc'; Note = ''
+    }
+    $null = Export-InvoiceWorkbook -Path $appendWorkbook -SummaryRows @($invoiceB) -DetailRows @() -ErrorRows @($errorRow) -Append
+    $errorRows = @(Read-ExcelWorksheetRows -Path $appendWorkbook -SheetName 'BaoCao_LoiTaiHD' -FirstDataRow 2 -LastColumn 17)
+    Assert-Equal 1 $errorRows.Count 'Dong loi cua hoa don duoc ghi vao bao cao'
+    Assert-Equal '1002' (Get-ExcelMergeText $errorRows[0].Cells[8].Value) 'Dong loi giu so hoa don de doi chieu'
+    # Hoa don do lan nay xu ly thanh cong: dong loi cu bi go khoi bao cao.
+    $null = Export-InvoiceWorkbook -Path $appendWorkbook -SummaryRows @($invoiceB) -DetailRows @() -ErrorRows @() -Append
+    $errorRows = @(Read-ExcelWorksheetRows -Path $appendWorkbook -SheetName 'BaoCao_LoiTaiHD' -FirstDataRow 2 -LastColumn 17)
+    Assert-Equal 0 $errorRows.Count 'Dong loi cu cua hoa don da xu ly lai thanh cong duoc go'
+
+    # Co file roi ma khong bat ghi tiep thi van tu choi nhu truoc.
+    $refused = $false
+    try { $null = Export-InvoiceWorkbook -Path $appendWorkbook -SummaryRows @() -DetailRows @() -ErrorRows @() }
+    catch { $refused = $true }
+    Assert-Equal $true $refused 'File da co van bi tu choi khi khong bat ghi tiep'
+    $conflict = $false
+    try { $null = Export-InvoiceWorkbook -Path $appendWorkbook -SummaryRows @() -DetailRows @() -ErrorRows @() -Overwrite -Append }
+    catch { $conflict = $true }
+    Assert-Equal $true $conflict 'Khong cho dung dong thoi ghi de va ghi tiep'
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $appendZip = [IO.Compression.ZipFile]::OpenRead($appendWorkbook)
+    try {
+        Assert-Equal 8 @($appendZip.Entries | Where-Object FullName -like 'xl/worksheets/sheet*.xml').Count 'Workbook ghi tiep van du 8 sheet'
+        Assert-Equal 1 @($appendZip.Entries | Where-Object FullName -eq '_rels/.rels').Count 'Workbook ghi tiep van co quan he goc'
+        Assert-Equal 0 @($appendZip.Entries | Where-Object { $_.FullName -match '\\' }).Count 'Khong part nao chua dau phan cach thu muc'
+    }
+    finally { $appendZip.Dispose() }
+}
+finally {
+    if (Test-Path -LiteralPath $appendWorkbook) { Remove-Item -LiteralPath $appendWorkbook -Force }
 }
 
 # --- Icon app: ICO dung dinh dang va moi entry nam trong file ---
