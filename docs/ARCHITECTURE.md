@@ -200,3 +200,40 @@ dữ liệu riêng của người dùng. Giao diện luôn dùng `OVERWRITE_OUTP
 4. Dữ liệu xuất ra phải giữ đúng tên sheet, tên cột, thứ tự cột và kiểu số của
    bản gốc `TaiHoaDonDienTu`.
 5. Mọi thay đổi phải kèm test chạy được bằng `tests/Run-Tests.ps1`.
+
+## Kiểm tra cập nhật desktop
+
+`src/DesktopUpdates.ps1` đọc phiên bản từ `app-version.json`, kiểm tra stable
+release của GitHub và chọn asset Windows portable có phiên bản trùng tag.
+Check/download dùng pipeline PowerShell riêng, timer UI nhận kết quả cả khi
+không chạy tác vụ hóa đơn. Lỗi cập nhật chỉ đổi banner cập nhật. Không dùng
+token GDT, không gọi API GDT, không thay đổi dữ liệu/cấu hình hóa đơn.
+
+Tải ZIP vào file `.partial` riêng, kiểm tra dung lượng/cấu trúc rồi mới move
+sang tên đích; từ chối ghi đè. Đóng app sẽ hủy download và chờ pipeline kết thúc,
+xóa partial. Người dùng giải nén và mở bản mới bằng tay.
+`ui/vi-VN.json` chứa thông báo mới có dấu, được đọc rõ UTF-8 trên PowerShell 5.1.
+Build lấy version từ cùng manifest để tạo metadata EXE.
+
+## EXE một file và bố cục compact
+
+Build mặc định nhúng ZIP mã nguồn có danh sách part tường minh vào resource
+Hddt.Payload.zip của launcher. Launcher tạo runtime riêng trong TEMP, kiểm tra
+mọi đường dẫn entry ở trong runtime, chạy PowerShell STA ẩn console và dọn
+runtime sau khi worker thoát. Không đăng ký cài đặt hay cần quyền admin.
+FolderBundle giữ nhánh launcher với script rời để tương thích công cụ cũ.
+
+Start-HddtGui nhận DataDirectory/DefaultOutputDirectory từ launcher. Mã vẫn
+được nạp từ GuiRoot, còn cấu hình và dữ liệu dùng đường dẫn bền vững bên ngoài
+runtime. Không đưa .env/cấu hình người dùng/dữ liệu hóa đơn vào resource.
+
+MainWindow dùng Grid với header, notification, workspace, progress, logs và
+footer; không đặt nội dung trong ScrollViewer toàn trang. Khu log co giãn,
+hiển thị 4–6 dòng gần nhất, không scrollbar lồng; bản đầy đủ mở trong dialog.
+Raw log vẫn đọc cùng stream được redact, giữ lịch sử phiên trong StringBuilder.
+Bộ test layout render ở DPI 96/120 và kiểm tra bounds/control, không thay đổi
+cài đặt display scaling thật của Windows.
+
+Updater ưu tiên asset EXE trùng version tag và giữ fallback ZIP. Tải xong
+kiểm tra dung lượng, checksum SHA-256 nếu có, PE header hoặc cấu trúc ZIP,
+rồi mới move file tạm. Không tự thực thi bản cập nhật vừa tải.
