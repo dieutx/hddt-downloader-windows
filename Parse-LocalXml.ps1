@@ -54,6 +54,7 @@ try {
     }
     $outputWorkbook = Join-Path $outputDirectory $outputName
     $overwrite = ConvertTo-EnvBoolean -Name 'OVERWRITE_OUTPUT' -Value (Get-EnvValue -Values $values -Name 'OVERWRITE_OUTPUT' -Default 'false')
+    $append = ConvertTo-EnvBoolean -Name 'APPEND_OUTPUT' -Value (Get-EnvValue -Values $values -Name 'APPEND_OUTPUT' -Default 'false')
     $progressEvery = [int](Get-EnvValue -Values $values -Name 'PROGRESS_EVERY' -Default '1')
     $logLevel = (Get-EnvValue -Values $values -Name 'LOG_LEVEL' -Default 'info').ToLowerInvariant()
     $logToFile = ConvertTo-EnvBoolean -Name 'LOG_TO_FILE' -Value (Get-EnvValue -Values $values -Name 'LOG_TO_FILE' -Default 'true')
@@ -133,7 +134,10 @@ try {
     }
     if (Test-HddtRunStopRequested) { Write-HddtLog WARN '[STOP] Xuat phan XML da xu ly truoc khi dung.' }
     Write-HddtLog INFO ('[XUẤT FILE] Tạo workbook: tổng hợp {0} | chi tiết {1} | lỗi {2}.' -f $summaryRows.Count, $detailRows.Count, $errorRows.Count)
-    $export = Export-InvoiceWorkbook -Path $outputWorkbook -SummaryRows ($summaryRows.ToArray()) -DetailRows ($detailRows.ToArray()) -ErrorRows ($errorRows.ToArray()) -Overwrite:$overwrite -LookupTablePath $lookupTableXlsx
+    $export = Export-InvoiceWorkbook -Path $outputWorkbook -SummaryRows ($summaryRows.ToArray()) -DetailRows ($detailRows.ToArray()) -ErrorRows ($errorRows.ToArray()) -Overwrite:$overwrite -Append:$append -LookupTablePath $lookupTableXlsx
+    if ($export.AppendMode) {
+        Write-HddtLog INFO ('[XUẤT FILE] Ghi tiếp vào file đã có: giữ {0} dòng cũ, thay {1} dòng theo hóa đơn lần này.' -f $export.MergedKeptRows, $export.MergedReplacedRows)
+    }
     Write-HddtLog INFO ('[XUẤT FILE] Link tra cứu: {0}/{1} hóa đơn có link | bảng LinkTraCuu {2} dòng.' -f $export.LinksResolved, $export.SummaryRows, $export.LookupSheetRows)
     $stopwatch.Stop()
     Write-HddtLog INFO ('[KẾT QUẢ] Hoàn tất | chạy {0:hh\:mm\:ss} | file: {1}' -f $stopwatch.Elapsed, $outputWorkbook)

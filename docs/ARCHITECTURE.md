@@ -178,7 +178,17 @@ workbook. Đóng cửa sổ lúc đang chạy yêu cầu dừng và chờ tác v
 `Build-WindowsApp.ps1` dùng trình biên dịch .NET Framework có sẵn trên Windows
 để tạo launcher `ui/Launcher.cs`, gọi Windows PowerShell ở chế độ STA và ẩn
 console. Gói portable có danh sách file mã nguồn tường minh; không đóng gói
-dữ liệu riêng của người dùng. Giao diện luôn dùng `OVERWRITE_OUTPUT=false`.
+dữ liệu riêng của người dùng. Giao diện luôn dùng `OVERWRITE_OUTPUT=false`;
+việc ghi tiếp vào file đã có do `APPEND_OUTPUT` (tick **Ghi tiếp vào file đã
+chọn**, mặc định bật) quyết định.
+
+`Export-InvoiceWorkbook -Append` đọc lại sáu sheet dữ liệu và sheet báo cáo lỗi
+của workbook đích (`Read-ExcelWorksheetRows`), trộn theo khóa hóa đơn
+(`Merge-ExcelSheetRows`) rồi ghi lại một workbook duy nhất: hóa đơn trùng khóa
+bị thay bằng dữ liệu mới, hóa đơn khác giữ nguyên, hóa đơn mới nối vào cuối.
+Bảng `LinkTraCuu` của file đích được nạp lại trước khi sinh link nên phần người
+dùng tự sửa không bị mất. File ghi tiếp vẫn đi qua `Assert-ExcelPackage` và
+thay thế nguyên tử như nhánh ghi đè.
 
 ## Điểm mở rộng
 

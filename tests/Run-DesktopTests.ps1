@@ -37,7 +37,25 @@ try {
     Assert-Desktop ($guiValues.GDT_PASSWORD -eq 'synthetic-ui-password') 'WPF passes password unchanged in memory'
     Assert-Desktop ($guiValues.OVERWRITE_OUTPUT -eq 'false') 'WPF prevents overwriting existing output'
     Assert-Desktop ($guiValues.FROM_DATE -match '^\d{2}/\d{2}/\d{4}$') 'DatePicker uses the CLI date contract'
+    Assert-Desktop ($guiValues.APPEND_OUTPUT -eq 'true') 'Append into the selected file is on by default'
     $guiValues.Clear()
+
+    # File da ton tai: van tu choi khi bo tick, ghi tiep khi bat tick.
+    $appendProbe = Join-Path ([IO.Path]::GetTempPath()) ('hddt-append-ui-' + [guid]::NewGuid().ToString('N'))
+    $null = New-Item -ItemType Directory -Path $appendProbe
+    $existingOutput = Join-Path $appendProbe 'da-co.xlsx'
+    [IO.File]::WriteAllText($existingOutput, 'synthetic')
+    $script:GuiControls.OutputPath.Text = $existingOutput
+    $appendValues = Get-HddtGuiValues
+    Assert-Desktop ($appendValues.APPEND_OUTPUT -eq 'true') 'Existing output keeps append mode'
+    $appendValues.Clear()
+    $script:GuiControls.AppendOutput.IsChecked = $false
+    $appendRefused = $false
+    try { $null = Get-HddtGuiValues } catch { $appendRefused = $true }
+    Assert-Desktop $appendRefused 'Existing output is still refused without the append tick'
+    $script:GuiControls.AppendOutput.IsChecked = $true
+    $script:GuiControls.OutputPath.Text = Join-Path $testDirectory 'download.xlsx'
+    Remove-Item -LiteralPath $appendProbe -Recurse -Force
 
     # Mat khau mac dinh an; nut con mat chi dong bo trong bo nho.
     Assert-Desktop (-not $script:GuiControls.TogglePassword.IsChecked) 'Password is masked by default'

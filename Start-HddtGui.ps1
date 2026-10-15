@@ -79,7 +79,7 @@ foreach ($name in @('LoadConfig', 'AdvancedSettings', 'ModeTabs', 'Username', 'P
     'PercentText', 'ProcessedCount', 'RemainingCount', 'ElapsedTime', 'EstimatedTime',
     'CurrentVersion', 'CheckUpdates', 'ReleasePage', 'UpdateTitle', 'UpdateStatus', 'DownloadUpdate', 'ShowUpdateFile',
     'UpdateBanner', 'ViewReleaseNotes', 'DismissUpdate', 'ProxyOptions', 'ProxyPopup', 'ShowFullLog', 'AppState', 'StateDot', 'WorkspaceRoot', 'ActivityTab', 'TechnicalTab', 'LogDetailRow', 'UpdateIndicator',
-    'PasswordVisible', 'TogglePassword', 'PasswordEyeSlash')) {
+    'PasswordVisible', 'TogglePassword', 'PasswordEyeSlash', 'AppendOutput')) {
     $control = $script:GuiWindow.FindName($name)
     if ($null -eq $control) { throw ('Thieu control: {0}' -f $name) }
     $script:GuiControls[$name] = $control
@@ -88,7 +88,8 @@ $script:GuiControls.CurrentVersion.Text = 'v' + $script:GuiVersion
 $script:GuiControls.ActivityLog.ItemsSource = $script:GuiRecentActivity
 $script:GuiControls.FromDate.SelectedDate = (Get-Date).Date.AddDays(1 - (Get-Date).Day)
 $script:GuiControls.ToDate.SelectedDate = (Get-Date).Date
-$script:GuiControls.OutputPath.Text = Join-Path $script:GuiOutputRoot ('HoaDonDienTu_{0}.xlsx' -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
+# Tên mặc định cố định để lần sau ghi tiếp vào đúng file đang dùng.
+$script:GuiControls.OutputPath.Text = Join-Path $script:GuiOutputRoot 'HoaDonDienTu.xlsx'
 
 function Set-HddtGuiPasswordVisibility {
     param([bool]$Visible)
@@ -383,7 +384,7 @@ function Add-HddtGuiLog {
 
 function Set-HddtGuiBusy {
     param([bool]$Busy)
-    foreach ($name in @('ModeTabs', 'LoadConfig', 'AdvancedSettings', 'OutputPath', 'BrowseOutput', 'StartRun', 'ProxyOptions')) {
+    foreach ($name in @('ModeTabs', 'LoadConfig', 'AdvancedSettings', 'OutputPath', 'BrowseOutput', 'StartRun', 'ProxyOptions', 'AppendOutput')) {
         $script:GuiControls[$name].IsEnabled = -not $Busy
     }
     if ($Busy) {
@@ -401,11 +402,15 @@ function Get-HddtGuiValues {
         throw 'Hay chon file dau ra co phan mo rong .xlsx.'
     }
     $output = Resolve-RepositoryPath $script:GuiDataRoot $output
-    if (Test-Path -LiteralPath $output) { throw 'File dau ra da ton tai. Hay chon ten moi de giu nguyen du lieu cu.' }
+    $appendOutput = ($c.AppendOutput.IsChecked -eq $true)
+    if ((Test-Path -LiteralPath $output) -and -not $appendOutput) {
+        throw 'File dau ra da ton tai. Hay tick "Ghi tiep vao file da chon" hoac chon ten moi de giu nguyen du lieu cu.'
+    }
     $values['OUTPUT_DIR'] = [IO.Path]::GetDirectoryName($output)
     $values['OUTPUT_XLSX'] = [IO.Path]::GetFileName($output)
     $values['LOCAL_OUTPUT_XLSX'] = [IO.Path]::GetFileName($output)
     $values['OVERWRITE_OUTPUT'] = 'false'
+    $values['APPEND_OUTPUT'] = $(if ($appendOutput) { 'true' } else { 'false' })
     $values['PROGRESS_EVERY'] = '1'
     if ($c.ModeTabs.SelectedIndex -eq 1) {
         $source = Resolve-RepositoryPath $script:GuiDataRoot $c.XmlDirectory.Text.Trim()
@@ -569,7 +574,7 @@ $script:GuiControls.LoadConfig.Add_Click({
             $c[$field[0]].IsChecked = ConvertTo-EnvBoolean $field[1] (Get-EnvValue $values $field[1] $field[2])
         }
         $outputDirectory = Resolve-RepositoryPath $script:GuiDataRoot (Get-EnvValue $values 'OUTPUT_DIR' 'output')
-        $c.OutputPath.Text = Join-Path $outputDirectory ('HoaDonDienTu_{0}.xlsx' -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
+        $c.OutputPath.Text = Join-Path $outputDirectory 'HoaDonDienTu.xlsx'
         $values.Remove('GDT_PASSWORD')
         $values.Remove('PROXY_PASSWORD')
         $script:GuiDefaults = $values

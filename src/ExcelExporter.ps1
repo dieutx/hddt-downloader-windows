@@ -1270,6 +1270,292 @@ function Assert-ExcelPackage {
     }
 }
 
+# --- Ghi tiếp vào workbook đã có ------------------------------------------
+# Với APPEND_OUTPUT=true/-Append, file cũ được đọc lại, trộn theo khóa hóa đơn
+# (thêm hóa đơn mới, thay hóa đơn đã có bằng dữ liệu mới) rồi ghi lại thành một
+# workbook duy nhất.  Đọc theo giá trị + số định dạng nên giữ đúng kiểu ngày/số
+# của file cũ, kể cả khi người dùng đã mở và lưu lại bằng Excel.
+
+function Get-ExcelZipEntryText {
+    param($Archive, [string]$Name)
+    $entry = $Archive.GetEntry($Name)
+    if ($null -eq $entry) { return $null }
+    $stream = $entry.Open()
+    $reader = New-Object IO.StreamReader($stream, [Text.Encoding]::UTF8, $true)
+    try { return $reader.ReadToEnd() }
+    finally { $reader.Dispose(); $stream.Dispose() }
+}
+
+# Excel khi lưu lại file sẽ chuyển chuỗi inline thành shared strings; đọc cả hai
+# dạng để file đã mở/sửa bằng Excel vẫn ghi tiếp được.
+function Get-ExcelSharedStrings {
+    param($Archive)
+    $text = Get-ExcelZipEntryText $Archive 'xl/sharedStrings.xml'
+    if ([string]::IsNullOrWhiteSpace($text)) { return @() }
+    $document = [xml]$text
+    $manager = New-Object Xml.XmlNamespaceManager($document.NameTable)
+    $manager.AddNamespace('x', $script:SpreadsheetNamespace)
+    $values = New-Object System.Collections.Generic.List[string]
+    foreach ($item in $document.SelectNodes('/x:sst/x:si', $manager)) {
+        $value = ''
+        foreach ($node in $item.SelectNodes('.//x:t', $manager)) { $value += $node.InnerText }
+        $values.Add($value)
+    }
+    return $values.ToArray()
+}
+
+# Quy đổi numFmtId của file cũ sang chỉ số cellXfs của workbook này.  File do
+# chương trình tạo có đúng 17 kiểu nên dùng thẳng chỉ số gốc; file đã lưu lại
+# bằng Excel thì dựa vào định dạng số để đoán kiểu tương ứng.
+function Get-ExcelStyleTranslation {
+    param($Archive)
+    $translation = @{ Exact = $false; Formats = @() }
+    $text = Get-ExcelZipEntryText $Archive 'xl/styles.xml'
+    if ([string]::IsNullOrWhiteSpace($text)) { return $translation }
+    $document = [xml]$text
+    $manager = New-Object Xml.XmlNamespaceManager($document.NameTable)
+    $manager.AddNamespace('x', $script:SpreadsheetNamespace)
+    $custom = @{}
+    foreach ($numberFormat in $document.SelectNodes('/x:styleSheet/x:numFmts/x:numFmt', $manager)) {
+        $custom[[int]$numberFormat.GetAttribute('numFmtId')] = [string]$numberFormat.GetAttribute('formatCode')
+    }
+    $formats = New-Object System.Collections.Generic.List[object]
+    foreach ($xf in $document.SelectNodes('/x:styleSheet/x:cellXfs/x:xf', $manager)) {
+        $numberFormatId = 0
+        $attribute = $xf.GetAttribute('numFmtId')
+        if (-not [string]::IsNullOrWhiteSpace($attribute)) { [void][int]::TryParse($attribute, [ref]$numberFormatId) }
+        $code = ''
+        if ($custom.ContainsKey($numberFormatId)) { $code = [string]$custom[$numberFormatId] }
+        $formats.Add([pscustomobject]@{ NumberFormatId = $numberFormatId; FormatCode = $code })
+    }
+    $translation.Exact = ($formats.Count -eq 17)
+    $translation.Formats = $formats.ToArray()
+    return $translation
+}
+
+# 5 = chung, 6 = ngày, 7 = số có phân cách nghìn, 14 = ngày + giờ, 16 = text.
+function Get-ExcelOwnStyleFromNumberFormat {
+    param([int]$NumberFormatId, [string]$FormatCode)
+    if ($NumberFormatId -eq 49 -or $FormatCode -eq '@') { return 16 }
+    $code = $FormatCode.ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($code)) {
+        if ($NumberFormatId -ge 14 -and $NumberFormatId -le 22) { return 6 }
+        if ($NumberFormatId -ge 45 -and $NumberFormatId -le 47) { return 14 }
+        if ($NumberFormatId -in @(3, 4)) { return 7 }
+        return 5
+    }
+    if ($code -match '\[red\]|\[blue\]|\[black\]') { $code = ($code -replace '\[[a-z]+\]', '') }
+    if ($code -match 'y|d') {
+        if ($code -match 'h|s') { return 14 }
+        return 6
+    }
+    if ($code -match '#|0') { return 7 }
+    return 5
+}
+
+function ConvertFrom-ExcelCellText {
+    param([string]$Text, [string]$Type)
+    if ($Type -eq 'b') { return ($Text -eq '1') }
+    if ($Type -eq 'd') {
+        $parsed = [datetime]::MinValue
+        if ([datetime]::TryParse($Text, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsed)) { return $parsed }
+        return $Text
+    }
+    if ($Type -in @('inlineStr', 's', 'str', 'e', '')) {
+        if ($Type -eq '' -and -not [string]::IsNullOrWhiteSpace($Text)) {
+            $number = 0.0
+            if ([double]::TryParse($Text, [Globalization.NumberStyles]::Any, [Globalization.CultureInfo]::InvariantCulture, [ref]$number)) { return $number }
+        }
+        if ($Type -eq '') { return '' }
+        return $Text
+    }
+    $value = 0.0
+    if ([double]::TryParse($Text, [Globalization.NumberStyles]::Any, [Globalization.CultureInfo]::InvariantCulture, [ref]$value)) { return $value }
+    return $Text
+}
+
+# Đọc các dòng dữ liệu của một sheet trong workbook đã có, trả về cùng cấu trúc
+# row record mà Write-ExcelWorksheetXml dùng (Cells/Style/Hyperlink/Height).
+function Read-ExcelWorksheetRows {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$SheetName,
+        [int]$FirstDataRow = 3,
+        [int]$LastColumn = 0
+    )
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($Path)
+    try {
+        $workbookText = Get-ExcelZipEntryText $archive 'xl/workbook.xml'
+        if ([string]::IsNullOrWhiteSpace($workbookText)) { throw ("File Excel không hợp lệ: " + $Path) }
+        $workbook = [xml]$workbookText
+        $manager = New-Object Xml.XmlNamespaceManager($workbook.NameTable)
+        $manager.AddNamespace('x', $script:SpreadsheetNamespace)
+        $manager.AddNamespace('r', $script:RelationshipNamespace)
+        $relationshipId = ''
+        foreach ($sheet in $workbook.SelectNodes('/x:workbook/x:sheets/x:sheet', $manager)) {
+            if (([string]$sheet.GetAttribute('name')) -ne $SheetName) { continue }
+            $relationshipId = [string]$sheet.GetAttribute('id', $script:RelationshipNamespace)
+            break
+        }
+        if ([string]::IsNullOrWhiteSpace($relationshipId)) { return @() }
+        $relationshipsText = Get-ExcelZipEntryText $archive 'xl/_rels/workbook.xml.rels'
+        if ([string]::IsNullOrWhiteSpace($relationshipsText)) { throw ("File Excel thiếu quan hệ workbook: " + $Path) }
+        $relationships = [xml]$relationshipsText
+        $target = ''
+        foreach ($relationship in $relationships.DocumentElement.ChildNodes) {
+            if (([string]$relationship.GetAttribute('Id')) -eq $relationshipId) { $target = [string]$relationship.GetAttribute('Target'); break }
+        }
+        if ([string]::IsNullOrWhiteSpace($target)) { return @() }
+        $target = $target.TrimStart('/')
+        if (-not $target.StartsWith('xl/')) { $target = 'xl/' + $target }
+        $sheetText = Get-ExcelZipEntryText $archive $target
+        if ([string]::IsNullOrWhiteSpace($sheetText)) { return @() }
+
+        $sheetRelationships = @{}
+        $relationshipPath = $target -replace 'xl/worksheets/', 'xl/worksheets/_rels/'
+        $relationshipPath = $relationshipPath + '.rels'
+        $sheetRelationshipsText = Get-ExcelZipEntryText $archive $relationshipPath
+        if (-not [string]::IsNullOrWhiteSpace($sheetRelationshipsText)) {
+            $sheetRelationshipDocument = [xml]$sheetRelationshipsText
+            foreach ($relationship in $sheetRelationshipDocument.DocumentElement.ChildNodes) {
+                $sheetRelationships[[string]$relationship.GetAttribute('Id')] = [string]$relationship.GetAttribute('Target')
+            }
+        }
+
+        $sharedStrings = @(Get-ExcelSharedStrings $archive)
+        $styles = Get-ExcelStyleTranslation $archive
+        $document = [xml]$sheetText
+        $sheetManager = New-Object Xml.XmlNamespaceManager($document.NameTable)
+        $sheetManager.AddNamespace('x', $script:SpreadsheetNamespace)
+        $sheetManager.AddNamespace('r', $script:RelationshipNamespace)
+
+        $rows = New-Object System.Collections.Generic.List[object]
+        foreach ($rowNode in $document.SelectNodes('/x:worksheet/x:sheetData/x:row', $sheetManager)) {
+            $rowNumber = 0
+            if (-not [int]::TryParse([string]$rowNode.GetAttribute('r'), [ref]$rowNumber)) { continue }
+            if ($rowNumber -lt $FirstDataRow) { continue }
+            $record = New-ExcelDataRow
+            foreach ($cell in $rowNode.SelectNodes('x:c', $sheetManager)) {
+                $reference = [string]$cell.GetAttribute('r')
+                if ($reference -notmatch '^([A-Z]+)') { continue }
+                $column = 0
+                foreach ($character in $Matches[1].ToCharArray()) { $column = ($column * 26) + ([int][char]$character - 64) }
+                if ($LastColumn -gt 0 -and $column -gt $LastColumn) { continue }
+                $type = [string]$cell.GetAttribute('t')
+                $text = ''
+                if ($type -eq 'inlineStr') {
+                    foreach ($node in $cell.SelectNodes('x:is//x:t', $sheetManager)) { $text += $node.InnerText }
+                }
+                else {
+                    $valueNode = $cell.SelectSingleNode('x:v', $sheetManager)
+                    if ($null -ne $valueNode) { $text = [string]$valueNode.InnerText }
+                    if ($type -eq 's' -and -not [string]::IsNullOrWhiteSpace($text)) {
+                        $sharedIndex = 0
+                        if ([int]::TryParse($text, [ref]$sharedIndex) -and $sharedIndex -ge 0 -and $sharedIndex -lt $sharedStrings.Count) {
+                            $text = [string]$sharedStrings[$sharedIndex]
+                        }
+                    }
+                }
+                $sourceStyle = 0
+                [void][int]::TryParse([string]$cell.GetAttribute('s'), [ref]$sourceStyle)
+                $style = 5
+                if ($styles.Exact) {
+                    if ($sourceStyle -ge 0 -and $sourceStyle -lt $styles.Formats.Count) { $style = $sourceStyle }
+                }
+                elseif ($sourceStyle -ge 0 -and $sourceStyle -lt $styles.Formats.Count) {
+                    $format = $styles.Formats[$sourceStyle]
+                    $style = Get-ExcelOwnStyleFromNumberFormat -NumberFormatId $format.NumberFormatId -FormatCode $format.FormatCode
+                }
+                $hyperlink = ''
+                $relationshipAttribute = [string]$cell.GetAttribute('id', $script:RelationshipNamespace)
+                if (-not [string]::IsNullOrWhiteSpace($relationshipAttribute) -and $sheetRelationships.ContainsKey($relationshipAttribute)) {
+                    $hyperlink = [string]$sheetRelationships[$relationshipAttribute]
+                }
+                $value = ConvertFrom-ExcelCellText -Text $text -Type $type
+                if (-not [string]::IsNullOrEmpty($hyperlink) -and $style -eq 5) { $style = 10 }
+                Set-ExcelDataCell $record $column $value $style $hyperlink
+            }
+            if ($record.Cells.Count -eq 0) { continue }
+            if ($styles.Exact) {
+                $height = 0.0
+                if ([double]::TryParse([string]$rowNode.GetAttribute('ht'), [Globalization.NumberStyles]::Any, [Globalization.CultureInfo]::InvariantCulture, [ref]$height) -and $height -gt 0) {
+                    $record.Height = $height
+                }
+            }
+            $rows.Add($record)
+        }
+        return $rows.ToArray()
+    }
+    finally { $archive.Dispose() }
+}
+
+# Chuẩn hóa một giá trị ô thành text để so khóa: ngày và số dùng cùng cách viết
+# mà Write-ExcelCell dùng nên dòng cũ và dòng mới cùng hóa đơn luôn khớp nhau.
+function Get-ExcelMergeText {
+    param($Value)
+    if ($null -eq $Value) { return '' }
+    if ($Value -is [datetime]) { return ([datetime]$Value).ToOADate().ToString('0.###############', [Globalization.CultureInfo]::InvariantCulture) }
+    if ($Value -is [bool]) { return $(if ($Value) { '1' } else { '0' }) }
+    $numeric = @('Byte', 'SByte', 'Int16', 'UInt16', 'Int32', 'UInt32', 'Int64', 'UInt64', 'Single', 'Double', 'Decimal')
+    if ($numeric -contains $Value.GetType().Name) { return [Convert]::ToString([double]$Value, [Globalization.CultureInfo]::InvariantCulture) }
+    return ([string]$Value).Trim()
+}
+
+function Get-ExcelInvoiceMergeKey {
+    param($Row, [int[]]$KeyColumns = @())
+    if ($null -eq $Row -or $KeyColumns.Count -eq 0) { return '' }
+    $parts = New-Object System.Collections.Generic.List[string]
+    $hasValue = $false
+    foreach ($column in $KeyColumns) {
+        $text = ''
+        if ($Row.Cells.ContainsKey($column)) { $text = Get-ExcelMergeText $Row.Cells[$column].Value }
+        if (-not [string]::IsNullOrWhiteSpace($text)) { $hasValue = $true }
+        $parts.Add($text.ToLowerInvariant())
+    }
+    if (-not $hasValue) { return '' }
+    return ($parts -join '|')
+}
+
+# Trộn dòng cũ với dòng của lần chạy này: hóa đơn đã có thì thay bằng dữ liệu
+# mới, hóa đơn khác giữ nguyên, rồi nối các hóa đơn mới vào cuối.
+function Merge-ExcelSheetRows {
+    param(
+        [object[]]$PreservedRows = @(),
+        [object[]]$NewRows = @(),
+        [int[]]$KeyColumns = @(),
+        $DropKeys = $null,
+        [switch]$RenumberFirstColumn
+    )
+    $newKeys = @{}
+    foreach ($row in @($NewRows)) {
+        $key = Get-ExcelInvoiceMergeKey -Row $row -KeyColumns $KeyColumns
+        if (-not [string]::IsNullOrWhiteSpace($key)) { $newKeys[$key] = $true }
+    }
+    $kept = New-Object System.Collections.Generic.List[object]
+    $replaced = 0
+    foreach ($row in @($PreservedRows)) {
+        $key = Get-ExcelInvoiceMergeKey -Row $row -KeyColumns $KeyColumns
+        if (-not [string]::IsNullOrWhiteSpace($key)) {
+            if ($newKeys.ContainsKey($key)) { $replaced++; continue }
+            if ($null -ne $DropKeys -and $DropKeys.ContainsKey($key)) { $replaced++; continue }
+        }
+        $kept.Add($row)
+    }
+    $merged = New-Object System.Collections.Generic.List[object]
+    foreach ($row in $kept) { $merged.Add($row) }
+    foreach ($row in @($NewRows)) { $merged.Add($row) }
+    if ($RenumberFirstColumn) {
+        for ($index = 0; $index -lt $merged.Count; $index++) {
+            $row = $merged[$index]
+            $style = 5
+            if ($row.Cells.ContainsKey(1)) { $style = [int]$row.Cells[1].Style }
+            Set-ExcelDataCell $row 1 ($index + 1) $style
+        }
+    }
+    return [pscustomobject]@{ Rows = $merged.ToArray(); KeptRows = $kept.Count; ReplacedRows = $replaced }
+}
+
 function Export-InvoiceWorkbook {
     [CmdletBinding()]
     param(
@@ -1278,13 +1564,20 @@ function Export-InvoiceWorkbook {
         [Parameter(Mandatory = $true)]$DetailRows,
         [Parameter(Mandatory = $true)]$ErrorRows,
         [switch]$Overwrite,
+        # Ghi tiếp vào file đã có: đọc dữ liệu cũ, thay hóa đơn trùng khóa bằng
+        # dữ liệu mới rồi ghi lại vào cùng một workbook.
+        [switch]$Append,
         # Workbook .xlsx có sheet 'LinkTraCuu' do người dùng sửa; các dòng
         # MST/link trong đó được nối vào bảng tra cứu dùng cho file này.
         [string]$LookupTablePath = ''
     )
 
-    if ((Test-Path -LiteralPath $Path) -and -not $Overwrite) {
-        throw "File Excel đã tồn tại: $Path. Đặt OVERWRITE_OUTPUT=true để ghi đè."
+    if ($Overwrite -and $Append) {
+        throw 'Chỉ dùng một trong hai: OVERWRITE_OUTPUT hoặc APPEND_OUTPUT.'
+    }
+    $appendToExisting = $Append -and (Test-Path -LiteralPath $Path -PathType Leaf)
+    if ((Test-Path -LiteralPath $Path) -and -not $Overwrite -and -not $Append) {
+        throw "File Excel đã tồn tại: $Path. Đặt OVERWRITE_OUTPUT=true để ghi đè hoặc APPEND_OUTPUT=true để ghi tiếp."
     }
     $parent = Split-Path -Parent $Path
     if ([string]::IsNullOrWhiteSpace($parent)) { $parent = (Get-Location).Path }
@@ -1293,6 +1586,16 @@ function Export-InvoiceWorkbook {
     }
 
     $importedLookupRows = 0
+    if ($appendToExisting) {
+        # Giữ phần người dùng đã sửa trong sheet LinkTraCuu của chính file đang
+        # ghi tiếp: nạp bảng đó trước, rồi LOOKUP_TABLE_XLSX (nếu có) ghi đè sau.
+        try { $importedLookupRows = Import-ExcelLookupTable -Path $Path }
+        catch {
+            if (Get-Command Write-HddtLog -ErrorAction SilentlyContinue) {
+                Write-HddtLog WARN ('[XUẤT FILE] Không nạp được bảng LinkTraCuu từ file cũ ({0}); dùng bảng mặc định.' -f $_.Exception.Message)
+            }
+        }
+    }
     if (-not [string]::IsNullOrWhiteSpace($LookupTablePath)) {
         $importedLookupRows = Import-ExcelLookupTable -Path $LookupTablePath
     }
@@ -1318,6 +1621,45 @@ function Export-InvoiceWorkbook {
         [pscustomobject]@{ Name='BaoCao_LoiTaiHD'; Title=''; Headers=$script:SourceErrorHeaders; Rows=$errorData; Widths=$script:SourceErrorWidths; HeaderStyle=13; HeaderRow=1; DataStartRow=2; Freeze=$true; Filter=$true },
         [pscustomobject]@{ Name='LinkTraCuu'; Title=''; Headers=$script:SourceLookupHeaders; Rows=(New-ExcelLookupRows); Widths=$script:SourceLookupWidths; HeaderStyle=2; HeaderRow=1; DataStartRow=2; Freeze=$true; Filter=$false }
     )
+
+    $appendStats = @{ ReplacedRows = 0; KeptRows = 0 }
+    if ($appendToExisting) {
+        # Khóa hóa đơn theo sheet: (mẫu số, ký hiệu, số, ngày lập, MST người
+        # bán, MST người mua) tính theo đúng thứ tự cột của sheet đó.
+        $sheetKeys = @{
+            TongHopHD_Mua = @(3, 4, 5, 6, 10, 16)
+            TongHopHD_Ban = @(3, 4, 5, 6, 10, 16)
+            ChiTietHD_Mua = @(1, 2, 3, 4, 8, 14)
+            ChiTietHD_Ban = @(1, 2, 3, 4, 8, 14)
+            ChiTietHD_Mua_XML = @(1, 3, 4, 8, 14)
+            ChiTietHD_Ban_XML = @(1, 3, 4, 8, 14)
+            BaoCao_LoiTaiHD = @(5, 7, 8, 9)
+        }
+        # Hóa đơn nào lần này đã được xử lý thì dòng lỗi cũ của nó bị thay bằng
+        # kết quả mới, kể cả khi lần này hóa đơn đó thành công.
+        # Khóa dùng cho sheet lỗi chỉ gồm (MST người bán, ký hiệu, số, ngày lập):
+        # lấy đúng bốn cột đó từ sheet tổng hợp để hai bên so khớp được nhau.
+        $processedKeyColumns = @(10, 4, 5, 6)
+        $processedKeys = @{}
+        foreach ($name in @('TongHopHD_Mua', 'TongHopHD_Ban')) {
+            foreach ($row in @($sheetDefinitions | Where-Object { $_.Name -eq $name } | ForEach-Object { $_.Rows })) {
+                $key = Get-ExcelInvoiceMergeKey -Row $row -KeyColumns $processedKeyColumns
+                if (-not [string]::IsNullOrWhiteSpace($key)) { $processedKeys[$key] = $true }
+            }
+        }
+        foreach ($definition in $sheetDefinitions) {
+            if (-not $sheetKeys.ContainsKey($definition.Name)) { continue }
+            $keys = @($sheetKeys[$definition.Name])
+            $preserved = @(Read-ExcelWorksheetRows -Path $Path -SheetName $definition.Name -FirstDataRow $definition.DataStartRow -LastColumn $definition.Headers.Count)
+            $dropKeys = $null
+            if ($definition.Name -eq 'BaoCao_LoiTaiHD') { $dropKeys = $processedKeys }
+            $renumber = ([string]$definition.Headers[0] -eq 'STT')
+            $merge = Merge-ExcelSheetRows -PreservedRows $preserved -NewRows @($definition.Rows) -KeyColumns $keys -DropKeys $dropKeys -RenumberFirstColumn:$renumber
+            $definition.Rows = @($merge.Rows)
+            $appendStats.ReplacedRows += $merge.ReplacedRows
+            $appendStats.KeptRows += $merge.KeptRows
+        }
+    }
 
     $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ('hddt-xlsx-' + [guid]::NewGuid().ToString('N'))
     $stagingPath = Join-Path $parent ('.' + [IO.Path]::GetFileName($Path) + '.hddt-' + [guid]::NewGuid().ToString('N') + '.tmp')
@@ -1404,7 +1746,7 @@ function Export-InvoiceWorkbook {
         # thành phần bắt buộc. Nếu file đang mở, thay thế thất bại hoặc gói
         # hỏng, bản cũ vẫn còn nguyên.
         Assert-ExcelPackage -Path $stagingPath -Parts $packageParts.ToArray()
-        if ($Overwrite -and (Test-Path -LiteralPath $Path)) {
+        if (($Overwrite -or $Append) -and (Test-Path -LiteralPath $Path)) {
             [IO.File]::Replace($stagingPath, $Path, $backupPath)
             if (Test-Path -LiteralPath $backupPath) { Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue }
         }
@@ -1438,5 +1780,8 @@ function Export-InvoiceWorkbook {
         LinksMissing = $summaryRowList.Count - $linkedCount
         LookupSheetRows = @(Get-TaiHoaDonDienTuLookupSheetRows).Count
         ImportedLookupRows = $importedLookupRows
+        AppendMode = $appendToExisting
+        MergedKeptRows = $appendStats.KeptRows
+        MergedReplacedRows = $appendStats.ReplacedRows
     }
 }

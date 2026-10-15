@@ -167,6 +167,7 @@ function Complete-HddtInteractiveValues {
     $valuesCopy['FETCH_RELATED'] = Read-HddtInteractiveBoolean -Existing (Get-EnvValue $valuesCopy 'FETCH_RELATED' 'true') -Prompt 'FETCH_RELATED' -Default $true
     $valuesCopy['REDOWNLOAD_XML'] = Read-HddtInteractiveBoolean -Existing (Get-EnvValue $valuesCopy 'REDOWNLOAD_XML' 'false') -Prompt 'REDOWNLOAD_XML' -Default $false
     $valuesCopy['OVERWRITE_OUTPUT'] = Read-HddtInteractiveBoolean -Existing (Get-EnvValue $valuesCopy 'OVERWRITE_OUTPUT' 'false') -Prompt 'OVERWRITE_OUTPUT' -Default $false
+    $valuesCopy['APPEND_OUTPUT'] = Read-HddtInteractiveBoolean -Existing (Get-EnvValue $valuesCopy 'APPEND_OUTPUT' 'false') -Prompt 'APPEND_OUTPUT (true=ghi tiếp vào file Excel đã có)' -Default $false
     $proxyUrl = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'PROXY_URL' '') -Prompt 'PROXY_URL (http://host:port; CLEAR để tắt proxy)' -Default ''
     if ($proxyUrl.Trim() -match '^(?i:CLEAR|__CLEAR__)$') { $proxyUrl = '' }
     $valuesCopy['PROXY_URL'] = $proxyUrl
@@ -189,6 +190,7 @@ function Complete-HddtLocalInteractiveValues {
     $valuesCopy['OUTPUT_DIR'] = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'OUTPUT_DIR' 'output') -Prompt 'OUTPUT_DIR' -Default 'output'
     $valuesCopy['LOCAL_OUTPUT_XLSX'] = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'LOCAL_OUTPUT_XLSX' 'HoaDonDienTu_Local.xlsx') -Prompt 'LOCAL_OUTPUT_XLSX' -Default 'HoaDonDienTu_Local.xlsx'
     $valuesCopy['OVERWRITE_OUTPUT'] = Read-HddtInteractiveBoolean -Existing (Get-EnvValue $valuesCopy 'OVERWRITE_OUTPUT' 'false') -Prompt 'OVERWRITE_OUTPUT' -Default $false
+    $valuesCopy['APPEND_OUTPUT'] = Read-HddtInteractiveBoolean -Existing (Get-EnvValue $valuesCopy 'APPEND_OUTPUT' 'false') -Prompt 'APPEND_OUTPUT (true=ghi tiếp vào file Excel đã có)' -Default $false
     $valuesCopy['PROGRESS_EVERY'] = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'PROGRESS_EVERY' '1') -Prompt 'PROGRESS_EVERY' -Default '1'
     $valuesCopy['LOG_LEVEL'] = Read-HddtInteractiveValue -Existing (Get-EnvValue $valuesCopy 'LOG_LEVEL' 'info') -Prompt 'LOG_LEVEL' -Default 'info'
     $valuesCopy['LOG_TO_FILE'] = Read-HddtInteractiveBoolean -Existing (Get-EnvValue $valuesCopy 'LOG_TO_FILE' 'true') -Prompt 'LOG_TO_FILE' -Default $true
@@ -324,6 +326,12 @@ function Get-HddtConfig {
         throw 'PROXY_PASSWORD cần PROXY_USERNAME tương ứng.'
     }
 
+    $overwriteOutput = ConvertTo-EnvBoolean 'OVERWRITE_OUTPUT' (Get-EnvValue $values 'OVERWRITE_OUTPUT' 'false')
+    $appendOutput = ConvertTo-EnvBoolean 'APPEND_OUTPUT' (Get-EnvValue $values 'APPEND_OUTPUT' 'false')
+    if ($overwriteOutput -and $appendOutput) {
+        throw 'Chỉ đặt một trong hai: OVERWRITE_OUTPUT hoặc APPEND_OUTPUT.'
+    }
+
     return [pscustomobject]@{
         Token = $token
         Username = $username.Trim()
@@ -353,7 +361,8 @@ function Get-HddtConfig {
         IncludeSco = $includeSco
         FetchRelated = $fetchRelated
         RedownloadXml = ConvertTo-EnvBoolean 'REDOWNLOAD_XML' (Get-EnvValue $values 'REDOWNLOAD_XML' 'false')
-        OverwriteOutput = ConvertTo-EnvBoolean 'OVERWRITE_OUTPUT' (Get-EnvValue $values 'OVERWRITE_OUTPUT' 'false')
+        OverwriteOutput = $overwriteOutput
+        AppendOutput = $appendOutput
         OutputDirectory = $outputDirectory
         OutputWorkbook = Join-Path $outputDirectory $outputName
         LookupTableXlsx = $lookupTableXlsx

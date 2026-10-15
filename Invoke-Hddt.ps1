@@ -433,7 +433,10 @@ try {
         else {
             Write-HddtLog INFO ('[XUẤT FILE] Tạo workbook: tổng hợp {0} | chi tiết {1} | lỗi {2}.' -f $summaryRows.Count, $detailRows.Count, $errorRows.Count)
         }
-        $export = Export-InvoiceWorkbook -Path $config.OutputWorkbook -SummaryRows ($summaryRows.ToArray()) -DetailRows ($detailRows.ToArray()) -ErrorRows ($errorRows.ToArray()) -Overwrite:$config.OverwriteOutput -LookupTablePath $config.LookupTableXlsx
+        $export = Export-InvoiceWorkbook -Path $config.OutputWorkbook -SummaryRows ($summaryRows.ToArray()) -DetailRows ($detailRows.ToArray()) -ErrorRows ($errorRows.ToArray()) -Overwrite:$config.OverwriteOutput -Append:$config.AppendOutput -LookupTablePath $config.LookupTableXlsx
+        if ($export.AppendMode) {
+            Write-HddtLog INFO ('[XUẤT FILE] Ghi tiếp vào file đã có: giữ {0} dòng cũ, thay {1} dòng theo hóa đơn lần này.' -f $export.MergedKeptRows, $export.MergedReplacedRows)
+        }
         $exported = $true
         if ($export.LinksMissing -gt 0) {
             Write-HddtLog INFO ('[XUẤT FILE] Link tra cứu: {0}/{1} hóa đơn có link; {2} hóa đơn không có nhà cung cấp trong bảng LinkTraCuu.' -f $export.LinksResolved, $export.SummaryRows, $export.LinksMissing)

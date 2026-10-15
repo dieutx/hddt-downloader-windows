@@ -3,6 +3,14 @@
 ## v1.1.1 — 2026-10-15
 
 - Chỉ một file EXE: nhấn đúp chạy, không cần tự giải nén hoặc cài đặt.
+- Ghi tiếp vào một file Excel: tick **Ghi tiếp vào file đã chọn** (mặc định bật)
+  hoặc `APPEND_OUTPUT=true` để nối hóa đơn mới vào file đã có. Hóa đơn trùng khóa
+  (mẫu số, ký hiệu, số, ngày lập, MST người bán/mua) được thay bằng dữ liệu mới,
+  nên resume, chạy lại cùng kỳ, tách riêng mua vào/bán ra hoặc đổi kỳ đều dùng
+  chung một file mà không nhân đôi dữ liệu. Bảng `LinkTraCuu` và dòng lỗi của hóa
+  đơn đã xử lý lại cũng được cập nhật theo.
+- Tên file Excel mặc định của giao diện là `HoaDonDienTu.xlsx` (bỏ thời điểm chạy)
+  để hợp với luồng ghi tiếp một file duy nhất.
 - Icon riêng cho app (16–256 px) dùng trong Explorer, title bar và taskbar; cửa sổ
   WPF nạp icon từ payload khi khởi động.
 - Build hỗ trợ ký Authenticode sẵn (`-SignCertificateThumbprint`, SHA-256 kèm mốc
