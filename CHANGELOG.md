@@ -2,6 +2,14 @@
 
 ## v1.1.1 — 2026-10-15
 
+Cập nhật asset ngày 16/10/2026:
+
+- Khôi phục định dạng mẫu VBA: Consolas, màu riêng theo sheet, kiểu ô, độ rộng
+  cột, chiều cao hàng, cố định khung, bộ lọc và lề in; giữ nguyên 64/34/32 cột.
+- Kiểm thử hồi quy định dạng và ghi tiếp; tài nguyên mẫu được nhúng trong EXE.
+- Rút gọn README; chuyển hướng dẫn chi tiết sang `docs/USAGE.md`.
+
+
 - Chỉ một file EXE: nhấn đúp chạy, không cần tự giải nén hoặc cài đặt.
 - Ghi tiếp vào một file Excel: tick **Ghi tiếp vào file đã chọn** (mặc định bật)
   hoặc `APPEND_OUTPUT=true` để nối hóa đơn mới vào file đã có. Hóa đơn trùng khóa

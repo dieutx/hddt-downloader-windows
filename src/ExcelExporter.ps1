@@ -4,6 +4,9 @@
 # from TaiHoaDonDienTu are deliberately not copied into the generated workbook.
 . (Join-Path $PSScriptRoot 'LinkTraCuu.ps1')
 
+# Chi nap metadata dinh dang cong khai; khong can Excel hay template .xlsm.
+$script:ExcelLayout = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'ExcelLayout.json'), [Text.Encoding]::UTF8) | ConvertFrom-Json
+
 $script:SpreadsheetNamespace = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
 $script:RelationshipNamespace = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 $script:PackageRelationshipNamespace = 'http://schemas.openxmlformats.org/package/2006/relationships'
@@ -990,8 +993,14 @@ function Write-ExcelWorksheetXml {
         [int]$HeaderRow = 2,
         [int]$DataStartRow = 3,
         [switch]$FreezeHeader,
-        [switch]$AutoFilter
+        [switch]$AutoFilter,
+        $Layout = $null
     )
+    if ($null -ne $Layout) {
+        $Widths = @($Layout.Columns | ForEach-Object { [double]$_.Width })
+        $FreezeHeader = $Layout.FreezeRows -gt 0
+        $AutoFilter = [bool]$Layout.Filter
+    }
     $rowItems = New-Object System.Collections.Generic.List[object]
     foreach ($item in @($Rows)) { if ($null -ne $item) { $rowItems.Add($item) } }
     $headerItems = @($Headers | Where-Object { $null -ne $_ })
@@ -1006,7 +1015,6 @@ function Write-ExcelWorksheetXml {
 
         Write-XmlStartElement $writer 'sheetPr'
         Write-XmlStartElement $writer 'pageSetUpPr'
-        $writer.WriteAttributeString('fitToPage', '1')
         $writer.WriteEndElement()
         $writer.WriteEndElement()
 
@@ -1018,11 +1026,14 @@ function Write-ExcelWorksheetXml {
         Write-XmlStartElement $writer 'sheetView'
         $writer.WriteAttributeString('workbookViewId', '0')
         if ($FreezeHeader) {
-            $topLeft = 'A{0}' -f ($HeaderRow + 1)
+            $freezeColumns = 0
+            if ($null -ne $Layout) { $freezeColumns = [int]$Layout.FreezeColumns }
+            $topLeft = '{0}{1}' -f (Get-ExcelColumnName ($freezeColumns + 1)), ($HeaderRow + 1)
             Write-XmlStartElement $writer 'pane'
+            if ($freezeColumns -gt 0) { $writer.WriteAttributeString('xSplit', [string]$freezeColumns) }
             $writer.WriteAttributeString('ySplit', [string]$HeaderRow)
             $writer.WriteAttributeString('topLeftCell', $topLeft)
-            $writer.WriteAttributeString('activePane', 'bottomLeft')
+            $writer.WriteAttributeString('activePane', $(if ($freezeColumns -gt 0) { 'bottomRight' } else { 'bottomLeft' }))
             $writer.WriteAttributeString('state', 'frozen')
             $writer.WriteEndElement()
         }
@@ -1030,7 +1041,7 @@ function Write-ExcelWorksheetXml {
         $writer.WriteEndElement()
 
         Write-XmlStartElement $writer 'sheetFormatPr'
-        $writer.WriteAttributeString('defaultRowHeight', '15')
+        $writer.WriteAttributeString('defaultRowHeight', $(if ($null -ne $Layout) { [string]$Layout.DefaultRowHeight } else { '15' }))
         $writer.WriteEndElement()
 
         Write-XmlStartElement $writer 'cols'
@@ -1040,6 +1051,7 @@ function Write-ExcelWorksheetXml {
             $writer.WriteAttributeString('max', [string]($column + 1))
             $writer.WriteAttributeString('width', [Convert]::ToString($Widths[$column], [Globalization.CultureInfo]::InvariantCulture))
             $writer.WriteAttributeString('customWidth', '1')
+            if ($null -ne $Layout) { $writer.WriteAttributeString('style', [string]$Layout.Columns[$column].Style) }
             $writer.WriteEndElement()
         }
         $writer.WriteEndElement()
@@ -1048,17 +1060,19 @@ function Write-ExcelWorksheetXml {
         if (-not [string]::IsNullOrWhiteSpace($Title)) {
             Write-XmlStartElement $writer 'row'
             $writer.WriteAttributeString('r', '1')
-            $writer.WriteAttributeString('ht', '41.25')
+            $writer.WriteAttributeString('ht', $(if ($null -ne $Layout) { [string]$Layout.TitleHeight } else { '41.25' }))
             $writer.WriteAttributeString('customHeight', '1')
             Write-ExcelCell -Writer $writer -Reference 'A1' -Value $Title -Style $TitleStyle
             $writer.WriteEndElement()
         }
         Write-XmlStartElement $writer 'row'
         $writer.WriteAttributeString('r', [string]$HeaderRow)
-        $writer.WriteAttributeString('ht', $(if ($HeaderStyle -eq 13) { '30' } else { '48' }))
+        $writer.WriteAttributeString('ht', $(if ($null -ne $Layout) { [string]$Layout.HeaderHeight } elseif ($HeaderStyle -eq 13) { '30' } else { '48' }))
         $writer.WriteAttributeString('customHeight', '1')
         for ($column = 0; $column -lt $headerItems.Count; $column++) {
-            Write-ExcelCell -Writer $writer -Reference ((Get-ExcelColumnName ($column + 1)) + $HeaderRow) -Value $headerItems[$column] -Style $HeaderStyle
+            $cellHeaderStyle = $HeaderStyle
+            if ($null -ne $Layout) { $cellHeaderStyle = [int]$Layout.Columns[$column].HeaderStyle }
+            Write-ExcelCell -Writer $writer -Reference ((Get-ExcelColumnName ($column + 1)) + $HeaderRow) -Value $headerItems[$column] -Style $cellHeaderStyle
         }
         $writer.WriteEndElement()
 
@@ -1068,13 +1082,19 @@ function Write-ExcelWorksheetXml {
             Write-XmlStartElement $writer 'row'
             $writer.WriteAttributeString('r', [string]$excelRow)
             if ($null -ne $record.Height) {
-                $writer.WriteAttributeString('ht', ([double]$record.Height).ToString('0.##', [Globalization.CultureInfo]::InvariantCulture))
+                $height = [double]$record.Height
+                if ($null -ne $Layout) { $height = [Math]::Max($height, [double]$Layout.DefaultRowHeight) }
+                $writer.WriteAttributeString('ht', $height.ToString('0.##', [Globalization.CultureInfo]::InvariantCulture))
                 $writer.WriteAttributeString('customHeight', '1')
             }
             foreach ($column in ($record.Cells.Keys | Sort-Object)) {
                 $cell = $record.Cells[$column]
                 $reference = (Get-ExcelColumnName ([int]$column)) + $excelRow
-                Write-ExcelCell -Writer $writer -Reference $reference -Value $cell.Value -Style ([int]$cell.Style)
+                $cellStyle = [int]$cell.Style
+                if ($null -ne $Layout -and $column -le $Layout.Columns.Count -and $cellStyle -ge 0 -and $cellStyle -le 16) {
+                    $cellStyle = [int]$Layout.Columns[$column - 1].DataStyles[$cellStyle]
+                }
+                Write-ExcelCell -Writer $writer -Reference $reference -Value $cell.Value -Style $cellStyle
                 $target = ConvertTo-ExcelHyperlinkTarget ([string]$cell.Hyperlink)
                 if (-not [string]::IsNullOrWhiteSpace($target)) {
                     $hyperlinks.Add([pscustomobject]@{ Reference = $reference; Target = $target })
@@ -1086,8 +1106,10 @@ function Write-ExcelWorksheetXml {
 
         if ($AutoFilter) {
             $filterLastRow = [Math]::Max($HeaderRow, $lastRow)
+            $filterLastColumn = $lastColumn
+            if ($null -ne $Layout) { $filterLastColumn = Get-ExcelColumnName ([int]$Layout.FilterLastColumn) }
             Write-XmlStartElement $writer 'autoFilter'
-            $writer.WriteAttributeString('ref', ('A{0}:{1}{2}' -f $HeaderRow, $lastColumn, $filterLastRow))
+            $writer.WriteAttributeString('ref', ('A{0}:{1}{2}' -f $HeaderRow, $filterLastColumn, $filterLastRow))
             $writer.WriteEndElement()
         }
         if ($hyperlinks.Count -gt 0) {
@@ -1107,18 +1129,16 @@ function Write-ExcelWorksheetXml {
         $writer.WriteAttributeString('horizontalCentered', '0')
         $writer.WriteEndElement()
         Write-XmlStartElement $writer 'pageMargins'
-        $writer.WriteAttributeString('left', '0.25')
-        $writer.WriteAttributeString('right', '0.25')
-        $writer.WriteAttributeString('top', '0.5')
-        $writer.WriteAttributeString('bottom', '0.5')
-        $writer.WriteAttributeString('header', '0.2')
-        $writer.WriteAttributeString('footer', '0.2')
+        $writer.WriteAttributeString('left', '0.7')
+        $writer.WriteAttributeString('right', '0.7')
+        $writer.WriteAttributeString('top', '0.75')
+        $writer.WriteAttributeString('bottom', '0.75')
+        $writer.WriteAttributeString('header', '0.3')
+        $writer.WriteAttributeString('footer', '0.3')
         $writer.WriteEndElement()
         Write-XmlStartElement $writer 'pageSetup'
         $writer.WriteAttributeString('paperSize', '9')
-        $writer.WriteAttributeString('orientation', 'landscape')
-        $writer.WriteAttributeString('fitToWidth', '1')
-        $writer.WriteAttributeString('fitToHeight', '0')
+        $writer.WriteAttributeString('orientation', 'portrait')
         $writer.WriteEndElement()
         $writer.WriteEndElement()
     }
@@ -1150,60 +1170,8 @@ function Write-ExcelSheetRelationships {
 
 function Write-ExcelStylesXml {
     param([string]$Path)
-    $styles = @'
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-  <numFmts count="3">
-    <numFmt numFmtId="165" formatCode="dd/mm/yyyy"/>
-    <numFmt numFmtId="166" formatCode="dd/mm/yyyy hh:mm:ss"/>
-    <numFmt numFmtId="167" formatCode="_(* #,##0_);_(* \(#,##0\);_(* &quot;-&quot;??_);_(@_)"/>
-  </numFmts>
-  <fonts count="7">
-    <font><sz val="11"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>
-    <font><sz val="11"/><name val="Calibri"/><family val="2"/></font>
-    <font><b/><sz val="18"/><color rgb="FF7030A0"/><name val="Calibri"/><family val="2"/></font>
-    <font><u/><color rgb="FF0563C1"/><sz val="11"/><name val="Calibri"/><family val="2"/></font>
-    <font><color rgb="FF0000FF"/><sz val="11"/><name val="Calibri"/><family val="2"/></font>
-    <font><color rgb="FFFF0000"/><sz val="11"/><name val="Calibri"/><family val="2"/></font>
-    <font><b/><sz val="11"/><name val="Calibri"/><family val="2"/></font>
-  </fonts>
-  <fills count="6">
-    <fill><patternFill patternType="none"/></fill>
-    <fill><patternFill patternType="gray125"/></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FFDDEBF7"/><bgColor indexed="64"/></patternFill></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FFE2F0D9"/><bgColor indexed="64"/></patternFill></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FFE0E1AD"/><bgColor indexed="64"/></patternFill></fill>
-    <fill><patternFill patternType="solid"><fgColor rgb="FFD9E1F2"/><bgColor indexed="64"/></patternFill></fill>
-  </fills>
-  <borders count="2">
-    <border><left/><right/><top/><bottom/><diagonal/></border>
-    <border><left style="thin"><color indexed="64"/></left><right style="thin"><color indexed="64"/></right><top style="thin"><color indexed="64"/></top><bottom style="thin"><color indexed="64"/></bottom><diagonal/></border>
-  </borders>
-  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="17">
-    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
-    <xf numFmtId="49" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="center"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
-    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
-    <xf numFmtId="165" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/>
-    <xf numFmtId="167" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/>
-    <xf numFmtId="9" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/>
-    <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
-    <xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/>
-    <xf numFmtId="0" fontId="4" fillId="0" borderId="0" xfId="0" applyFont="1"/>
-    <xf numFmtId="0" fontId="5" fillId="0" borderId="0" xfId="0" applyFont="1"/>
-    <xf numFmtId="0" fontId="6" fillId="5" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>
-    <xf numFmtId="166" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/>
-    <xf numFmtId="165" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/>
-    <xf numFmtId="49" fontId="1" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/>
-  </cellXfs>
-  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
-  <dxfs count="0"/>
-  <tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleMedium9"/>
-</styleSheet>
-'@
+    # Chi so 0..16 giu hop dong cu; style tiep theo khoi phuc mau/khung/canh cot VBA.
+    $styles = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'ExcelStyles.xml'), [Text.Encoding]::UTF8)
     Write-TextFileUtf8NoBom $Path $styles
 }
 
@@ -1309,7 +1277,7 @@ function Get-ExcelSharedStrings {
 # bằng Excel thì dựa vào định dạng số để đoán kiểu tương ứng.
 function Get-ExcelStyleTranslation {
     param($Archive)
-    $translation = @{ Exact = $false; Formats = @() }
+    $translation = @{ Exact = $false; Formats = @(); LogicalStyles = @() }
     $text = Get-ExcelZipEntryText $Archive 'xl/styles.xml'
     if ([string]::IsNullOrWhiteSpace($text)) { return $translation }
     $document = [xml]$text
@@ -1329,6 +1297,11 @@ function Get-ExcelStyleTranslation {
         $formats.Add([pscustomobject]@{ NumberFormatId = $numberFormatId; FormatCode = $code })
     }
     $translation.Exact = ($formats.Count -eq 17)
+    $marker = $document.SelectSingleNode('/x:styleSheet/x:cellStyles/x:cellStyle[@name="HddtData"]', $manager)
+    if ($null -ne $marker -and $formats.Count -eq $script:ExcelLayout.LogicalStyles.Count) {
+        $translation.Exact = $true
+        $translation.LogicalStyles = @($script:ExcelLayout.LogicalStyles)
+    }
     $translation.Formats = $formats.ToArray()
     return $translation
 }
@@ -1336,6 +1309,7 @@ function Get-ExcelStyleTranslation {
 # 5 = chung, 6 = ngày, 7 = số có phân cách nghìn, 14 = ngày + giờ, 16 = text.
 function Get-ExcelOwnStyleFromNumberFormat {
     param([int]$NumberFormatId, [string]$FormatCode)
+    if ($NumberFormatId -in @(9, 10)) { return 8 }
     if ($NumberFormatId -eq 49 -or $FormatCode -eq '@') { return 16 }
     $code = $FormatCode.ToLowerInvariant()
     if ([string]::IsNullOrWhiteSpace($code)) {
@@ -1461,7 +1435,10 @@ function Read-ExcelWorksheetRows {
                 [void][int]::TryParse([string]$cell.GetAttribute('s'), [ref]$sourceStyle)
                 $style = 5
                 if ($styles.Exact) {
-                    if ($sourceStyle -ge 0 -and $sourceStyle -lt $styles.Formats.Count) { $style = $sourceStyle }
+                    if ($sourceStyle -ge 0 -and $sourceStyle -lt $styles.Formats.Count) {
+                        $style = $sourceStyle
+                        if ($styles.LogicalStyles.Count -gt 0) { $style = [int]$styles.LogicalStyles[$sourceStyle] }
+                    }
                 }
                 elseif ($sourceStyle -ge 0 -and $sourceStyle -lt $styles.Formats.Count) {
                     $format = $styles.Formats[$sourceStyle]
@@ -1676,7 +1653,7 @@ function Export-InvoiceWorkbook {
             $sheet = $sheetDefinitions[$index]
             $sheetPartName = 'xl/worksheets/sheet{0}.xml' -f $sheetNumber
             $sheetPath = Join-ExcelPackagePath $tempRoot @('xl', 'worksheets', ('sheet{0}.xml' -f $sheetNumber))
-            $hyperlinks = Write-ExcelWorksheetXml -Path $sheetPath -Title $sheet.Title -Headers $sheet.Headers -Rows $sheet.Rows -Widths $sheet.Widths -HeaderStyle $sheet.HeaderStyle -HeaderRow $sheet.HeaderRow -DataStartRow $sheet.DataStartRow -FreezeHeader:$sheet.Freeze -AutoFilter:$sheet.Filter
+            $hyperlinks = Write-ExcelWorksheetXml -Path $sheetPath -Title $sheet.Title -Headers $sheet.Headers -Rows $sheet.Rows -Widths $sheet.Widths -HeaderStyle $sheet.HeaderStyle -HeaderRow $sheet.HeaderRow -DataStartRow $sheet.DataStartRow -FreezeHeader:$sheet.Freeze -AutoFilter:$sheet.Filter -Layout $script:ExcelLayout.Sheets.($sheet.Name)
             Add-ExcelPackagePart $packageParts $sheetPartName $sheetPath
             if (@($hyperlinks).Count -gt 0) {
                 $sheetRelsPartName = 'xl/worksheets/_rels/sheet{0}.xml.rels' -f $sheetNumber
@@ -1691,7 +1668,7 @@ function Export-InvoiceWorkbook {
         }
         $contentTypes = @"
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="$script:ContentTypeNamespace"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>$($sheetOverrides -join '')</Types>
+<Types xmlns="$script:ContentTypeNamespace"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/><Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>$($sheetOverrides -join '')</Types>
 "@
         $contentTypesPath = Join-ExcelPackagePath $tempRoot @('[Content_Types].xml')
         Write-TextFileUtf8NoBom $contentTypesPath $contentTypes
@@ -1717,9 +1694,10 @@ function Export-InvoiceWorkbook {
             '<Relationship Id="rId{0}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{0}.xml"/>' -f ($index + 1)
         }
         $stylesRelationshipId = $sheetDefinitions.Count + 1
+        $themeRelationshipId = $sheetDefinitions.Count + 2
         $workbookRelsXml = @"
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="$script:PackageRelationshipNamespace">$($workbookRelationships -join '')<Relationship Id="rId$stylesRelationshipId" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>
+<Relationships xmlns="$script:PackageRelationshipNamespace">$($workbookRelationships -join '')<Relationship Id="rId$stylesRelationshipId" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId$themeRelationshipId" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/></Relationships>
 "@
         $workbookRelsPath = Join-ExcelPackagePath $tempRoot @('xl', '_rels', 'workbook.xml.rels')
         Write-TextFileUtf8NoBom $workbookRelsPath $workbookRelsXml
@@ -1727,6 +1705,10 @@ function Export-InvoiceWorkbook {
         $stylesPath = Join-ExcelPackagePath $tempRoot @('xl', 'styles.xml')
         Write-ExcelStylesXml $stylesPath
         Add-ExcelPackagePart $packageParts 'xl/styles.xml' $stylesPath
+        $themePath = Join-ExcelPackagePath $tempRoot @('xl', 'theme', 'theme1.xml')
+        [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($themePath))
+        Write-TextFileUtf8NoBom $themePath ([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'ExcelTheme.xml'), [Text.Encoding]::UTF8))
+        Add-ExcelPackagePart $packageParts 'xl/theme/theme1.xml' $themePath
 
         Add-Type -AssemblyName System.IO.Compression
         Add-Type -AssemblyName System.IO.Compression.FileSystem

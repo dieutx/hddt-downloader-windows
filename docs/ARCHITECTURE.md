@@ -197,7 +197,7 @@ thay thế nguyên tử như nhánh ghi đè.
 | Thêm nhà cung cấp T-VAN | thêm dòng vào bảng trong `src/LinkTraCuu.ps1` |
 | Đổi câu chữ khi không có link | `Get-ExcelLookupLink` trong `src/ExcelExporter.ps1` |
 | Thêm cột vào sheet tổng hợp | `$script:SourceSummaryHeaders` + `$script:SourceSummaryWidths` + chỉ số cột trong `New-ExcelSummaryRows` (giữ nguyên thứ tự cột cũ) |
-| Thêm style | `Write-ExcelStylesXml` rồi dùng chỉ số `cellXfs` mới |
+| Thêm style | `src/ExcelStyles.xml` + ánh xạ cột/kiểu logic trong `src/ExcelLayout.json`; xem `EXCEL_FORMAT.md` |
 | Thêm biến cấu hình | `src/Config.ps1` + `.env.example` + `README.md` + test trong `tests/Run-Tests.ps1` |
 | Hỗ trợ nguồn hóa đơn mới | thêm hàm tương tự `Get-GdtInvoiceIndex`, trả về cùng cấu trúc `GdtIndex` |
 

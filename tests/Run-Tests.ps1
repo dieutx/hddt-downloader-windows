@@ -254,6 +254,12 @@ function Get-TestCellValue {
     return [string]$valueNode.InnerText
 }
 
+function Get-TestCellFormat {
+    param($Archive, $Cell)
+    [xml]$styles = Read-TestZipEntryText $Archive 'xl/styles.xml'
+    return $styles.DocumentElement.cellXfs.ChildNodes[[int]$Cell.GetAttribute('s')].GetAttribute('numFmtId')
+}
+
 $tempXlsx = Join-Path ([IO.Path]::GetTempPath()) ('hddt-test-' + [guid]::NewGuid().ToString('N') + '.xlsx')
 try {
     # Add a known provider lookup to exercise the data-only link projection.
@@ -312,13 +318,13 @@ try {
             $manager = New-Object Xml.XmlNamespaceManager($sheetDocument.NameTable)
             $manager.AddNamespace('x', $script:SpreadsheetNamespace)
             Assert-Equal 0 @($sheetDocument.SelectNodes('/x:worksheet/x:tableParts/x:tablePart', $manager)).Count ("Sheet $sheetNumber has no table part")
-            $expectedFilterCount = if ($sheetNumber -eq 7) { 1 } else { 0 }
+            $expectedFilterCount = if ($sheetNumber -in @(1, 4, 7, 8)) { 1 } else { 0 }
             Assert-Equal $expectedFilterCount @($sheetDocument.SelectNodes('/x:worksheet/x:autoFilter', $manager)).Count ("Sheet $sheetNumber AutoFilter contract")
         }
 
         $summarySheet = $sheetDocuments[1]
         $summaryDate = Get-TestCellNode $summarySheet 'F3'
-        Assert-Equal '6' $summaryDate.GetAttribute('s') 'Summary invoice date uses date style'
+        Assert-Equal '165' (Get-TestCellFormat $zip $summaryDate) 'Summary invoice date uses date style'
         Assert-Equal ([datetime]'2026-09-20').ToOADate().ToString('0.###############', [Globalization.CultureInfo]::InvariantCulture) (Get-TestCellValue $summarySheet 'F3') 'Summary invoice date is a numeric Excel date'
         Assert-Equal 'https://tracuuhoadon.vetc.com.vn/' (Get-TestCellValue $summarySheet 'BC3') 'Summary lookup link'
         Assert-Equal 'LOOK-001' (Get-TestCellValue $summarySheet 'BD3') 'Summary lookup code'
@@ -329,13 +335,13 @@ try {
         Assert-Equal 'Mẫu số hóa đơn' $script:SourceDetailHeaders[0] 'Detail sheet starts with the template-code column'
         Assert-Equal '1' (Get-TestCellValue $detailSheet 'A3') 'Detail template code comes from KHMSHDon'
         $detailTemplateCode = Get-TestCellNode $detailSheet 'A3'
-        Assert-Equal '16' $detailTemplateCode.GetAttribute('s') 'Detail template code is written as text'
+        Assert-Equal '49' (Get-TestCellFormat $zip $detailTemplateCode) 'Detail template code is written as text'
         $detailSellerTaxId = Get-TestCellNode $detailSheet 'H3'
-        Assert-Equal '16' $detailSellerTaxId.GetAttribute('s') 'Detail seller tax ID is written as text'
+        Assert-Equal '49' (Get-TestCellFormat $zip $detailSellerTaxId) 'Detail seller tax ID is written as text'
         $detailBuyerTaxId = Get-TestCellNode $detailSheet 'N3'
-        Assert-Equal '16' $detailBuyerTaxId.GetAttribute('s') 'Detail buyer tax ID is written as text'
+        Assert-Equal '49' (Get-TestCellFormat $zip $detailBuyerTaxId) 'Detail buyer tax ID is written as text'
         $detailRate = Get-TestCellNode $detailSheet 'Z3'
-        Assert-Equal '8' $detailRate.GetAttribute('s') 'Detail tax rate uses percentage style'
+        Assert-Equal '9' (Get-TestCellFormat $zip $detailRate) 'Detail tax rate uses percentage style'
         Assert-Equal '0.1' (Get-TestCellValue $detailSheet 'Z3') 'Detail tax rate is stored as a fraction'
         Assert-Equal 'https://tracuuhoadon.vetc.com.vn/' (Get-TestCellValue $detailSheet 'AG3') 'Detail lookup link'
 
@@ -373,9 +379,9 @@ try {
         $stylesManager.AddNamespace('x', $script:SpreadsheetNamespace)
         $headerFont = $stylesDocument.SelectSingleNode('/x:styleSheet/x:fonts/x:font[2]', $stylesManager)
         $headerFontOrder = (($headerFont.ChildNodes | ForEach-Object { $_.LocalName }) -join ',')
-        Assert-Equal 'sz,name,family' $headerFontOrder 'Header font element order follows Open XML schema'
-        Assert-Equal 'Calibri' $headerFont.SelectSingleNode('x:name', $stylesManager).GetAttribute('val') 'Vietnamese headers use Calibri'
-        Assert-Equal 0 @($stylesDocument.SelectNodes('/x:styleSheet/x:fonts/x:font/x:name[@val="Consolas"]', $stylesManager)).Count 'Workbook uses the same Unicode font for data and titles'
+        Assert-Equal 'sz,color,name,family' $headerFontOrder 'Header font element order follows Open XML schema'
+        Assert-Equal 'Consolas' $headerFont.SelectSingleNode('x:name', $stylesManager).GetAttribute('val') 'Headers restore the original VBA font'
+        Assert-Equal $true (@($stylesDocument.SelectNodes('/x:styleSheet/x:fonts/x:font/x:name[@val="Consolas"]', $stylesManager)).Count -gt 0) 'Workbook carries the original Consolas font'
         $lookupRelationships = [xml](Read-TestZipEntryText $zip 'xl/worksheets/_rels/sheet8.xml.rels')
         $lookupRelationshipMap = @{}
         foreach ($relationship in $lookupRelationships.DocumentElement.ChildNodes) {
@@ -833,7 +839,7 @@ try {
         $wrapStylesEntry = $wrapZip.GetEntry('xl/styles.xml')
         $wrapStylesReader = New-Object IO.StreamReader($wrapStylesEntry.Open())
         try { $wrapStylesText = $wrapStylesReader.ReadToEnd() } finally { $wrapStylesReader.Dispose() }
-        Assert-Equal $true ($wrapStylesText -match '<cellXfs count="17">') 'Workbook contains the complete data-only style set'
+        Assert-Equal $true ($wrapStylesText -match 'name="HddtData"') 'Workbook identifies the extended data-only style set'
         Assert-Equal $true ($wrapStylesText -match 'wrapText="1"') 'Wrap style enables text wrapping'
 
         $wrapSheetEntry = $wrapZip.GetEntry('xl/worksheets/sheet1.xml')
@@ -2051,5 +2057,7 @@ foreach ($scriptPath in $scriptPaths) {
 
 . (Join-Path $PSScriptRoot 'Test-InvoiceDetail.ps1')
 . (Join-Path $PSScriptRoot 'Test-ReviewRegression.ps1')
+
+. (Join-Path $PSScriptRoot 'Test-ExcelLayout.ps1')
 
 Write-Host 'All tests passed.' -ForegroundColor Green

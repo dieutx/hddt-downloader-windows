@@ -19,7 +19,7 @@ if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'Khong tim t
 # Chi dong goi danh sach ma nguon tuong minh; khong dong goi du lieu ca nhan.
 $parts = @('Start-HddtGui.ps1', 'Invoke-Hddt.ps1', 'Parse-LocalXml.ps1', 'README.md', 'CHANGELOG.md',
     'src/Logging.ps1', 'src/Config.ps1', 'src/Http.ps1', 'src/InvoiceApi.ps1', 'src/XmlParser.ps1',
-    'src/ExcelExporter.ps1', 'src/Login.ps1', 'src/BrowserProfile.ps1', 'src/XmlScheduler.ps1', 'src/InvoiceDetail.ps1',
+    'src/ExcelExporter.ps1', 'src/ExcelLayout.json', 'src/ExcelStyles.xml', 'src/ExcelTheme.xml', 'src/Login.ps1', 'src/BrowserProfile.ps1', 'src/XmlScheduler.ps1', 'src/InvoiceDetail.ps1',
     'src/LinkTraCuu.ps1', 'src/Desktop.ps1', 'src/DesktopSettings.ps1', 'src/DesktopUpdates.ps1',
     'app-version.json', 'ui/vi-VN.json', 'ui/MainWindow.xaml', 'ui/AdvancedSettings.xaml', 'ui/hddt.ico')
 foreach ($part in $parts) {

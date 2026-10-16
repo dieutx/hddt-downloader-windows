@@ -8,17 +8,49 @@ liệu này sẽ làm người dùng mất dữ liệu đọc được.
 
 | # | Tên | Dòng tiêu đề | Bắt đầu dữ liệu | Số cột | Bộ lọc |
 |---|---|---|---|---|---|
-| 1 | `TongHopHD_Mua` | 2 (tiêu đề ở dòng 1) | 3 | 64 | không |
+| 1 | `TongHopHD_Mua` | 2 (tiêu đề ở dòng 1) | 3 | 64 | A..BA |
 | 2 | `ChiTietHD_Mua` | 2 | 3 | 34 | không |
 | 3 | `ChiTietHD_Mua_XML` | 2 | 3 | 32 | không |
-| 4 | `TongHopHD_Ban` | 2 | 3 | 64 | không |
+| 4 | `TongHopHD_Ban` | 2 | 3 | 64 | A..BA |
 | 5 | `ChiTietHD_Ban` | 2 | 3 | 34 | không |
 | 6 | `ChiTietHD_Ban_XML` | 2 | 3 | 32 | không |
 | 7 | `BaoCao_LoiTaiHD` | 1 | 2 | 17 | có |
-| 8 | `LinkTraCuu` | 1 | 2 | 15 (A..O) | không |
+| 8 | `LinkTraCuu` | 1 | 2 | 15 (A..O) | A..E |
 
 Mọi sheet trừ `BaoCao_LoiTaiHD` và `LinkTraCuu` đều có dòng 1 là tiêu đề lớn và
 cố định hàng tiêu đề. Không có `vbaProject`, `MENU`, `Thamkhao`, `tableParts`.
+
+## Định dạng mẫu VBA
+
+Từ lần cập nhật asset v1.1.1 ngày 16/10/2026, định dạng được lấy từ workbook
+`TaiHoaDonDienTu_v6.7.7.xlsm`. Chỉ trích metadata công khai; chương trình không
+đọc hoặc sửa `.xlsm` lúc chạy và không đóng gói dữ liệu hóa đơn.
+
+| Sheet | Font chính | Màu tiêu đề | Cao dòng 1 / tiêu đề / mặc định (pt) |
+|---|---|---|---|
+| Tổng hợp mua | Consolas 11 | Cam nhạt, accent2 + tint 80% | 41.25 / 48 / 17.25 |
+| Tổng hợp bán | Consolas 11 | Xanh lá nhạt, accent6 + tint 80% | 41.25 / 48 / 17.25 |
+| Chi tiết mua | Consolas 11 | Vàng nhạt, accent4 + tint 80% | 34.5 / 51 / 19.5 |
+| Chi tiết bán | Consolas 11 | Xanh dương nhạt, accent5 + tint 80% | 34.5 / 51 / 19.5 |
+| Chi tiết XML | Consolas 11 | Olive `E0E1AD` | 34.5 / 51 / 19.5 |
+
+Tiêu đề lớn dùng Consolas 18 đậm, màu accent5 tối hơn 25%. Sheet tổng hợp cố
+định cột A và hai hàng đầu, mở ở B3; các sheet chi tiết cố định hai hàng đầu.
+`LinkTraCuu` giữ định dạng các nhóm tra cứu và không cố định khung. Sheet lỗi
+dùng Calibri như bản VBA. Lề trái/phải 0.7, trên/dưới 0.75 inch, trang dọc.
+
+Nguồn định dạng duy nhất:
+
+- `src/ExcelLayout.json`: kích thước, bộ lọc, cố định khung và ánh xạ kiểu ô
+  theo từng cột của từng sheet. Chi tiết đã thêm cột A theo script build VBA;
+  độ rộng các cột còn lại dịch cùng cột dữ liệu. Mua/bán giữ độ rộng riêng.
+- `src/ExcelStyles.xml`: font, màu nền, khung, căn lề và định dạng số.
+- `src/ExcelTheme.xml`: theme gốc để Excel giải đúng màu accent và tint.
+
+Cả ba tài nguyên phải có trong danh sách đóng gói EXE. Giữ nguyên 64/34/32 cột,
+kiểu ngày/số/Text và cách ghi dữ liệu hiện có; giữ xuống dòng cho chuỗi hóa
+đơn liên quan dài. Khi ghi tiếp, ánh xạ style về kiểu dữ liệu 0..16 rồi áp lại
+định dạng cột, tránh biến ngày, phần trăm hoặc MST thành kiểu khác.
 
 ## Sheet tổng hợp (1, 4)
 
@@ -145,7 +177,7 @@ Chỉ số truyền vào `Set-ExcelDataCell` là vị trí trong `cellXfs` của
 | 0 | mặc định |
 | 1 | dòng tiêu đề lớn |
 | 2, 3, 4, 13 | dòng tiêu đề bảng (nền khác nhau, xuống dòng) |
-| 5 | chữ (Calibri) |
+| 5 | chữ (Consolas; sheet lỗi theo font mẫu riêng) |
 | 6 | ngày `dd/mm/yyyy` |
 | 7 | số, định dạng kế toán |
 | 8 | phần trăm `0%` |
@@ -156,11 +188,11 @@ Chỉ số truyền vào `Set-ExcelDataCell` là vị trí trong `cellXfs` của
 | 15 | ngày |
 | 16 | chữ, định dạng text |
 
-Thêm style mới phải sửa cả `Write-ExcelStylesXml` và giữ `cellXfs count` khớp số
-phần tử.
-
-Toàn bộ font dùng Calibri; các chỉ số style, cỡ chữ, màu và định dạng số giữ
-nguyên. Dữ liệu JSON UTF-8 được giải mã trước khi ghi XML của workbook.
+Các chỉ số 0..16 là kiểu dữ liệu truyền vào `Set-ExcelDataCell`. Writer ánh xạ
+sang style trình bày của từng cột trong `ExcelLayout.json`. Các style bổ sung
+trong `ExcelStyles.xml` bắt đầu từ 17; `LogicalStyles` ánh xạ ngược khi ghi tiếp.
+Thêm style phải giữ `cellXfs count`, `LogicalStyles` và các ánh xạ cột khớp nhau.
+Dữ liệu JSON UTF-8 được giải mã trước khi ghi XML của workbook.
 
 ## Gói `.xlsx` (OPC)
 
@@ -171,8 +203,9 @@ thủ đặc tả:
 [Content_Types].xml          (Default rels/xml + Override từng part)
 _rels/.rels                  → officeDocument: xl/workbook.xml
 xl/workbook.xml              (danh sách sheet, r:id khớp workbook.xml.rels)
-xl/_rels/workbook.xml.rels   (7 worksheet + 1 styles)
+xl/_rels/workbook.xml.rels   (8 worksheet + 1 styles + 1 theme)
 xl/styles.xml                (numFmts, fonts, fills, borders, cellXfs, cellStyles)
+xl/theme/theme1.xml          (theme màu gốc)
 xl/worksheets/sheet1..8.xml
 xl/worksheets/_rels/sheetN.xml.rels   (chỉ khi sheet có hyperlink)
 ```
