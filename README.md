@@ -4,15 +4,15 @@ Tải XML hóa đơn điện tử **mua vào / bán ra** từ GDT và xuất Exc
 [TaiHoaDonDienTu](https://github.com/dieutx/TaiHoaDonDienTu).
 Có ứng dụng Windows một file EXE và dòng lệnh trên Windows, macOS, Linux.
 
-**[Tải v1.1.1 cho Windows](https://github.com/dieutx/hddt-downloader-windows/releases/download/v1.1.1/HDDT-Downloader-v1.1.1-windows.exe)**
-· [Release & checksum](https://github.com/dieutx/hddt-downloader-windows/releases/tag/v1.1.1)
+**[Tải v1.1.2 cho Windows](https://github.com/dieutx/hddt-downloader-windows/releases/download/v1.1.2/HDDT-Downloader-v1.1.2-windows.exe)**
+· [Release & checksum](https://github.com/dieutx/hddt-downloader-windows/releases/tag/v1.1.2)
 · [Video hướng dẫn](https://www.youtube.com/watch?v=nLWvosy-IM0)
 
 ![Giao diện HDDT Downloader](docs/images/hddt-desktop-v1.1.1.png)
 
 ## Bắt đầu trên Windows
 
-1. Tải và mở **HDDT-Downloader-v1.1.1-windows.exe**; không cần cài đặt hay cài Excel.
+1. Tải và mở **HDDT-Downloader-v1.1.2-windows.exe**; không cần cài đặt hay cài Excel.
 2. Nhập tài khoản GDT, chọn khoảng ngày và loại hóa đơn.
 3. Chọn nơi lưu rồi bấm **Bắt đầu**. Bấm **Dừng an toàn** để xuất phần đã xử lý.
 4. Có XML sẵn: dùng tab **XML có sẵn → Excel**, không cần đăng nhập hay Internet.
@@ -22,6 +22,13 @@ EXE hiện chưa ký số; Windows có thể hiện SmartScreen. Với file tả
 ở trên, mở **Properties → Unblock** nếu cần.
 
 ## Kết quả Excel
+
+Truy vấn hóa đơn máy tính tiền (`sco-query`) tự chia khoảng ngày thành các kỳ
+tối đa 10 ngày và lấy CAPTCHA mới cho từng trang. Hóa đơn thông thường vẫn
+chia theo tháng. API trả lại con trỏ phân trang cũ hoặc kết thúc trước `total`
+sẽ được ghi thành lỗi danh sách; dữ liệu đã nhận vẫn được giữ lại.
+Số hóa đơn mỗi trang gửi lên GDT được giới hạn ở 50, kể cả khi cấu hình cũ
+đặt `PAGE_SIZE=100`, vì máy chủ trả HTTP 500 với trang 100 hóa đơn.
 
 Giữ font **Consolas**, màu riêng cho từng sheet mua/bán, khung tiêu đề, độ rộng
 cột, chiều cao hàng và cố định khung theo mẫu VBA. File xuất là **.xlsx dữ liệu**,

@@ -93,6 +93,43 @@ function Get-MonthDateRanges {
     return $ranges.ToArray()
 }
 
+# GDT gioi han truy van may tinh tien toi da 10 ngay (tinh ca hai dau).
+function Get-GdtInvoiceDateRanges {
+    param([datetime]$FromDate, [datetime]$ToDate, [string]$Source)
+    foreach ($month in Get-MonthDateRanges -FromDate $FromDate -ToDate $ToDate) {
+        $current = $month.From
+        while ($current -le $month.To) {
+            $end = $month.To
+            if ($Source -eq 'sco-query' -and $current.AddDays(9) -lt $end) { $end = $current.AddDays(9) }
+            [pscustomobject]@{ From = $current; To = $end }
+            $current = $end.AddDays(1)
+        }
+    }
+}
+
+# Moi trang SCO can mot CAPTCHA moi; khong tai su dung CAPTCHA dang nhap.
+function Invoke-GdtInvoicePage {
+    param($Config, [string]$Uri, [string]$Source)
+    if ($Source -ne 'sco-query') {
+        return Invoke-GdtRequest -Config $Config -Uri $Uri -RequestProfile 'InvoiceQuery'
+    }
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        if (Test-HddtStopRequested) { throw 'Da dung theo yeu cau; khong truy van tiep.' }
+        $captcha = Get-GdtCaptcha -Config $Config
+        if ([string]::IsNullOrWhiteSpace($captcha.Key) -or [string]::IsNullOrWhiteSpace($captcha.Code)) { continue }
+        $pageUri = $Uri + '&ckey=' + (ConvertTo-QueryValue $captcha.Key) + '&cvalue=' + (ConvertTo-QueryValue $captcha.Code)
+        try {
+            return Invoke-GdtRequest -Config $Config -Uri $pageUri -RequestProfile 'InvoiceQuery'
+        }
+        catch {
+            # HTTP 400 co the do CAPTCHA het han/khong dung; chi thu lai co gioi han.
+            if ($attempt -eq 3 -or $_.Exception.Message -notmatch 'HTTP 400') { throw }
+            Write-HddtLog WARN ('[DANH SACH] SCO HTTP 400; lay CAPTCHA moi ({0}/3).' -f $attempt)
+        }
+    }
+    throw 'Khong lay duoc CAPTCHA cho truy van hoa don may tinh tien sau 3 lan.'
+}
+
 function Get-GdtInvoiceIndex {
     [CmdletBinding()]
     param(
@@ -102,9 +139,14 @@ function Get-GdtInvoiceIndex {
 
     Reset-GdtIndexErrors
     $results = New-Object System.Collections.Generic.List[object]
+    # GDT tra HTTP 500 voi size=100; giu tuong thich cau hinh cu nhung gioi han request.
+    $pageSize = [Math]::Min(50, [int]$Config.PageSize)
+    if ([int]$Config.PageSize -gt $pageSize) {
+        Write-HddtLog WARN ('[DANH SACH] Giam PAGE_SIZE tu {0} xuong {1} de tranh GDT HTTP 500.' -f $Config.PageSize, $pageSize)
+    }
     foreach ($family in Get-GdtFamilies $Config) {
         $familyStartCount = $results.Count
-        foreach ($period in Get-MonthDateRanges -FromDate $Config.FromDate -ToDate $Config.ToDate) {
+        foreach ($period in Get-GdtInvoiceDateRanges -FromDate $Config.FromDate -ToDate $Config.ToDate -Source $family) {
             $uri = ''
             $periodStartCount = $results.Count
             try {
@@ -119,13 +161,13 @@ function Get-GdtInvoiceIndex {
                         return $results.ToArray()
                     }
                     $pageNumber++
-                    $uri = '{0}/{1}/invoices/{2}?sort=tdlap%3Adesc&size={3}&search={4}' -f $Config.BaseUrl, $family, $Direction, $Config.PageSize, (ConvertTo-QueryValue $search)
+                    $uri = '{0}/{1}/invoices/{2}?sort=tdlap%3Adesc&size={3}&search={4}' -f $Config.BaseUrl, $family, $Direction, $pageSize, (ConvertTo-QueryValue $search)
                     if (-not [string]::IsNullOrWhiteSpace([string]$state)) {
                         $uri += '&state=' + (ConvertTo-QueryValue ([string]$state))
                     }
 
                     $pageWatch = [Diagnostics.Stopwatch]::StartNew()
-                    $payload = (Invoke-GdtRequest -Config $Config -Uri $uri -RequestProfile 'InvoiceQuery') | ConvertFrom-Json
+                    $payload = (Invoke-GdtInvoicePage -Config $Config -Uri $uri -Source $family) | ConvertFrom-Json
                     $pageWatch.Stop()
                     $datasProperty = if ($null -eq $payload) { $null } else { $payload.PSObject.Properties['datas'] }
                     if ($null -eq $datasProperty -or $null -eq $datasProperty.Value) {
@@ -165,13 +207,16 @@ function Get-GdtInvoiceIndex {
                     if (-not [string]::IsNullOrWhiteSpace($state)) {
                         $state = $state.Trim()
                         if (-not $seenStates.Add($state)) {
-                            Write-HddtLog WARN ('[DANH SÁCH] {0}/{1}, kỳ {2:dd/MM/yyyy}-{3:dd/MM/yyyy}: API trả lại state cũ; dừng phân trang.' -f $Direction, $family, $period.From, $period.To)
-                            $state = ''
+                            throw 'API tra lai state cu; danh sach co the chua day du.'
                         }
                     }
                     $nextText = if ([string]::IsNullOrWhiteSpace([string]$state)) { 'hết trang' } else { 'còn trang' }
                     Write-HddtLog INFO ('[DANH SÁCH] Trang {0}: HTTP 200 | +{1} hóa đơn | lũy kế {2} | {3} | {4} ms.' -f $pageNumber, $pageItems.Count, ($results.Count - $familyStartCount), $nextText, $pageWatch.ElapsedMilliseconds)
                 } while (-not [string]::IsNullOrWhiteSpace([string]$state))
+                $expectedTotal = Get-ObjectValue $payload 'total' $null
+                if ($null -ne $expectedTotal -and ($results.Count - $periodStartCount) -lt [long]$expectedTotal) {
+                    throw ('Danh sach chua day du: nhan {0}/{1} hoa don nhung API khong tra state tiep.' -f ($results.Count - $periodStartCount), $expectedTotal)
+                }
                 Write-HddtLog INFO ('[DANH SÁCH] Hoàn tất {0}/{1}, kỳ {2:dd/MM/yyyy}-{3:dd/MM/yyyy}: {4} hóa đơn.' -f $Direction, $family, $period.From, $period.To, ($results.Count - $periodStartCount))
             }
             catch {

@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.1.2 — 2026-10-28
+
+- Sửa truy vấn hóa đơn máy tính tiền: chia kỳ tối đa 10 ngày, lấy CAPTCHA mới
+  cho từng trang và thử lại có giới hạn khi CAPTCHA bị HTTP 400.
+- Giới hạn request danh sách ở 50 hóa đơn để tránh GDT HTTP 500 với `size=100`.
+- Ghi lỗi khi API lặp con trỏ hoặc hết con trỏ trước khi nhận đủ `total`, giữ
+  dữ liệu đã nhận để đối chiếu thay vì báo danh sách đã hoàn tất.
+
 ## v1.1.1 — 2026-10-15
 
 Cập nhật asset ngày 16/10/2026:

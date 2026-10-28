@@ -2055,6 +2055,7 @@ foreach ($scriptPath in $scriptPaths) {
     Assert-Equal 0 (@($parseErrors).Count) ('No parse error in ' + (Split-Path -Leaf $scriptPath))
 }
 
+. (Join-Path $PSScriptRoot 'Test-ScoQuery.ps1')
 . (Join-Path $PSScriptRoot 'Test-InvoiceDetail.ps1')
 . (Join-Path $PSScriptRoot 'Test-ReviewRegression.ps1')
 

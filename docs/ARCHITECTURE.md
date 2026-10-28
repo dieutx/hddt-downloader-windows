@@ -57,7 +57,12 @@ thử lại tối đa 3 lần. Lỗi 401 không bị retry mù.
 ### 3. Danh sách hóa đơn
 
 `Get-GdtInvoiceIndex` gọi `/api/{query|sco-query}/invoices/{direction}` theo từng
-kỳ tháng, phân trang bằng tham số `state`. Mỗi item giữ nguyên JSON gốc ở
+kỳ tháng cho `query`; `sco-query` chia tiếp thành tối đa 10 ngày tính cả hai
+đầu và lấy CAPTCHA mới (`ckey`, `cvalue`) cho mỗi trang, kể cả trang có `state`.
+Request giới hạn tối đa 50 hóa đơn để tránh HTTP 500 khi cấu hình cũ đặt 100.
+Phân trang bằng tham số `state`; con trỏ lặp hoặc số dòng chưa đạt `total`
+khi hết con trỏ sẽ ghi lỗi kỳ, giữ lại các dòng đã nhận.
+Mỗi item giữ nguyên JSON gốc ở
 `GdtIndex` để phần xuất Excel đọc được mọi trường (kể cả `msttcgp`, `cttkhac`,
 `ttkhac`) mà không cần chốt danh sách trường.
 
