@@ -59,6 +59,16 @@ thử lại tối đa 3 lần. Lỗi 401 không bị retry mù.
 `Get-GdtInvoiceIndex` gọi `/api/{query|sco-query}/invoices/{direction}` theo từng
 kỳ tháng cho `query`; `sco-query` chia tiếp thành tối đa 10 ngày tính cả hai
 đầu và lấy CAPTCHA mới (`ckey`, `cvalue`) cho mỗi trang, kể cả trang có `state`.
+`Http.ps1` đọc nội dung lỗi HTTP 400 bằng UTF-8 (cả Windows PowerShell 5.1 và
+PowerShell 7), nhận diện thông báo giới hạn khoảng ngày, rồi chỉ chuyển số N
+qua `Exception.Data['GdtRangeLimitDays']`; không đưa body lỗi thô vào log.
+`Get-GdtInvoiceIndex` xếp lại kỳ bị từ chối, chia thành các cửa sổ tối đa N ngày
+tính cả hai đầu và dùng N cho các kỳ tiếp theo của nguồn/chiều đang chạy.
+Giới hạn có thể giảm tiếp trong cùng lượt chạy; mỗi lần chia phải làm kỳ nhỏ
+hơn, nên lỗi ở kỳ một ngày được báo thay vì lặp vô hạn. Khi lỗi xảy ra giữa
+các trang, dữ liệu đã nhận được giữ lại; khóa hóa đơn của các dòng đó ngăn
+nhân đôi khi quét lại kỳ. Lỗi giới hạn được chuyển thẳng lên bộ chia kỳ,
+không thử CAPTCHA ba lần trên cùng khoảng ngày bị từ chối.
 Request giới hạn tối đa 50 hóa đơn để tránh HTTP 500 khi cấu hình cũ đặt 100.
 Phân trang bằng tham số `state`; con trỏ lặp hoặc số dòng chưa đạt `total`
 khi hết con trỏ sẽ ghi lỗi kỳ, giữ lại các dòng đã nhận.

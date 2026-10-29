@@ -208,6 +208,49 @@ function Get-HttpStatusCode {
     return 0
 }
 
+# Chi nhan thong bao gioi han khoang ngay; khong dua body loi vao log/workbook.
+function Get-GdtRangeLimitDays {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return 0 }
+    try {
+        $payload = $Text | ConvertFrom-Json -ErrorAction Stop
+        $property = $payload.PSObject.Properties['message']
+        if ($null -ne $property) { $Text = [string]$property.Value }
+    }
+    catch { }
+    $plain = ($Text.Normalize([Text.NormalizationForm]::FormD) -replace '\p{Mn}', '').ToLowerInvariant()
+    $plain = $plain.Replace([string][char]0x0111, 'd')
+    if ($plain -notmatch '(?:khoang\s+thoi\s+gian|khoang\s+ngay|date\s+range|search\s+period)') { return 0 }
+    $pattern = '(?:khong\s+(?:duoc\s+)?(?:lon\s+hon|qua|vuot\s+qua)|toi\s+da(?:\s+la)?|(?:cannot|must\s+not)\s+exceed|maximum(?:\s+of)?)\s*[:=]?\s*(\d+)\s*(?:ngay|days?)\b'
+    if ($plain -match $pattern) {
+        $days = 0
+        if ([int]::TryParse($Matches[1], [ref]$days) -and $days -gt 0) { return $days }
+    }
+    return 0
+}
+
+function Get-GdtErrorRangeLimitDays {
+    param([System.Management.Automation.ErrorRecord]$ErrorRecord)
+    $text = ''
+    if ($null -ne $ErrorRecord.ErrorDetails) { $text = $ErrorRecord.ErrorDetails.Message }
+    $days = Get-GdtRangeLimitDays $text
+    if ($days -gt 0) { return $days }
+    # PS 5.1 co the de body trong WebResponse; PS 7 dung HttpResponseMessage.
+    try {
+        $response = $ErrorRecord.Exception.Response
+        if ($null -eq $response) { return 0 }
+        if ($null -ne $response.PSObject.Methods['GetResponseStream']) {
+            $reader = New-Object IO.StreamReader($response.GetResponseStream(), [Text.Encoding]::UTF8)
+            try { $text = $reader.ReadToEnd() } finally { $reader.Dispose() }
+        }
+        elseif ($null -ne $response.PSObject.Properties['Content'] -and $null -ne $response.Content) {
+            $text = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        }
+        return Get-GdtRangeLimitDays $text
+    }
+    catch { return 0 }
+}
+
 function Get-HttpRetryAfterSeconds {
     param([System.Management.Automation.ErrorRecord]$ErrorRecord)
     try {
@@ -441,6 +484,14 @@ function Invoke-GdtRequest {
             }
             $status = Get-HttpStatusCode $_
             $script:LastGdtStatusCode = $status
+            if ($status -eq 400 -and $profileName -eq 'InvoiceQuery') {
+                $limitDays = Get-GdtErrorRangeLimitDays $_
+                if ($limitDays -gt 0) {
+                    $exception = New-Object System.InvalidOperationException('GDT gioi han khoang thoi gian tim kiem (HTTP 400).')
+                    $exception.Data['GdtRangeLimitDays'] = $limitDays
+                    throw $exception
+                }
+            }
             $usernameProperty = $Config.PSObject.Properties['Username']
             $passwordProperty = $Config.PSObject.Properties['Password']
             $hasCredentials = ($null -ne $usernameProperty -and -not [string]::IsNullOrWhiteSpace([string]$usernameProperty.Value) -and $null -ne $passwordProperty -and -not [string]::IsNullOrWhiteSpace([string]$passwordProperty.Value))
