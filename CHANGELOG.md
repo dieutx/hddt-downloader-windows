@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.1.3 — 2026-10-29
+
+- Tự đọc giới hạn N ngày từ lỗi HTTP 400 của GDT, chia lại kỳ bị từ chối và
+  áp dụng giới hạn mới cho các kỳ tiếp theo; hỗ trợ cả hóa đơn thường và máy
+  tính tiền khi giới hạn thay đổi thành 5, 3, 1 hoặc số ngày khác.
+- Không thử lại CAPTCHA khi lỗi do khoảng ngày; giữ các dòng đã nhận và tránh
+  nhân đôi nếu phải chia lại kỳ giữa các trang. Kỳ một ngày lỗi vẫn được báo,
+  không lặp vô hạn. Không ghi body lỗi HTTP thô ra log hoặc workbook.
+- Thêm kiểm thử giới hạn thay đổi, ranh giới tháng, dữ liệu phân trang nhận
+  một phần và tương thích đọc lỗi HTTP trên PowerShell 5.1/7.
+
 ## v1.1.2 — 2026-10-28
 
 - Sửa truy vấn hóa đơn máy tính tiền: chia kỳ tối đa 10 ngày, lấy CAPTCHA mới

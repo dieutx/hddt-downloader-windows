@@ -1,4 +1,4 @@
-﻿Set-StrictMode -Version 2.0
+Set-StrictMode -Version 2.0
 
 $script:GdtIndexErrors = New-Object System.Collections.Generic.List[object]
 
@@ -93,14 +93,15 @@ function Get-MonthDateRanges {
     return $ranges.ToArray()
 }
 
-# GDT gioi han truy van may tinh tien toi da 10 ngay (tinh ca hai dau).
+# Mac dinh SCO 10 ngay; gioi han moi duoc hoc tu phan hoi HTTP 400.
 function Get-GdtInvoiceDateRanges {
-    param([datetime]$FromDate, [datetime]$ToDate, [string]$Source)
+    param([datetime]$FromDate, [datetime]$ToDate, [string]$Source, [int]$MaxRangeDays = 0)
+    if ($MaxRangeDays -le 0 -and $Source -eq 'sco-query') { $MaxRangeDays = 10 }
     foreach ($month in Get-MonthDateRanges -FromDate $FromDate -ToDate $ToDate) {
         $current = $month.From
         while ($current -le $month.To) {
             $end = $month.To
-            if ($Source -eq 'sco-query' -and $current.AddDays(9) -lt $end) { $end = $current.AddDays(9) }
+            if ($MaxRangeDays -gt 0 -and ($end - $current).Days -ge $MaxRangeDays) { $end = $current.AddDays($MaxRangeDays - 1) }
             [pscustomobject]@{ From = $current; To = $end }
             $current = $end.AddDays(1)
         }
@@ -122,12 +123,19 @@ function Invoke-GdtInvoicePage {
             return Invoke-GdtRequest -Config $Config -Uri $pageUri -RequestProfile 'InvoiceQuery'
         }
         catch {
+            if ($_.Exception.Data.Contains('GdtRangeLimitDays')) { throw }
             # HTTP 400 co the do CAPTCHA het han/khong dung; chi thu lai co gioi han.
             if ($attempt -eq 3 -or $_.Exception.Message -notmatch 'HTTP 400') { throw }
             Write-HddtLog WARN ('[DANH SACH] SCO HTTP 400; lay CAPTCHA moi ({0}/3).' -f $attempt)
         }
     }
     throw 'Khong lay duoc CAPTCHA cho truy van hoa don may tinh tien sau 3 lan.'
+}
+
+function Get-GdtIndexItemKey {
+    param($Item)
+    $fields = @(foreach ($name in @('id', 'nbmst', 'khmshdon', 'khhdon', 'shdon', 'tdlap')) { Get-JsonTextValue $Item $name })
+    return ConvertTo-Json -InputObject $fields -Compress
 }
 
 function Get-GdtInvoiceIndex {
@@ -146,9 +154,22 @@ function Get-GdtInvoiceIndex {
     }
     foreach ($family in Get-GdtFamilies $Config) {
         $familyStartCount = $results.Count
-        foreach ($period in Get-GdtInvoiceDateRanges -FromDate $Config.FromDate -ToDate $Config.ToDate -Source $family) {
+        $maxRangeDays = if ($family -eq 'sco-query') { 10 } else { 0 }
+        $pendingPeriods = New-Object 'System.Collections.Generic.List[object]'
+        foreach ($initialPeriod in Get-GdtInvoiceDateRanges -FromDate $Config.FromDate -ToDate $Config.ToDate -Source $family) { $pendingPeriods.Add($initialPeriod) }
+        $replayedInvoices = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+        while ($pendingPeriods.Count -gt 0) {
+            if (Test-HddtStopRequested) { return $results.ToArray() }
+            $period = $pendingPeriods[0]
+            $pendingPeriods.RemoveAt(0)
+            if ($maxRangeDays -gt 0 -and ($period.To - $period.From).Days -ge $maxRangeDays) {
+                $subRanges = @(Get-GdtInvoiceDateRanges -FromDate $period.From -ToDate $period.To -Source $family -MaxRangeDays $maxRangeDays)
+                for ($i = $subRanges.Count - 1; $i -ge 0; $i--) { $pendingPeriods.Insert(0, $subRanges[$i]) }
+                continue
+            }
             $uri = ''
             $periodStartCount = $results.Count
+            $periodReceivedCount = 0
             try {
                 $pageNumber = 0
                 $seenStates = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
@@ -176,6 +197,10 @@ function Get-GdtInvoiceIndex {
                     $pageItems = @($datasProperty.Value)
                     foreach ($data in $pageItems) {
                         if ($null -eq $data) { continue }
+                        $periodReceivedCount++
+                        # Giu dong da nhan neu gioi han doi giua cac trang, tranh
+                        # nhan doi khi ky do phai truy van lai thanh cac ky nho.
+                        if ($replayedInvoices.Count -gt 0 -and $replayedInvoices.Contains((Get-GdtIndexItemKey $data))) { continue }
                         $status = ConvertTo-InvoiceStatus (Get-ObjectValue $data 'tthai' $null)
                         $results.Add([pscustomobject]@{
                             Direction = $Direction
@@ -214,13 +239,23 @@ function Get-GdtInvoiceIndex {
                     Write-HddtLog INFO ('[DANH SÁCH] Trang {0}: HTTP 200 | +{1} hóa đơn | lũy kế {2} | {3} | {4} ms.' -f $pageNumber, $pageItems.Count, ($results.Count - $familyStartCount), $nextText, $pageWatch.ElapsedMilliseconds)
                 } while (-not [string]::IsNullOrWhiteSpace([string]$state))
                 $expectedTotal = Get-ObjectValue $payload 'total' $null
-                if ($null -ne $expectedTotal -and ($results.Count - $periodStartCount) -lt [long]$expectedTotal) {
-                    throw ('Danh sach chua day du: nhan {0}/{1} hoa don nhung API khong tra state tiep.' -f ($results.Count - $periodStartCount), $expectedTotal)
+                if ($null -ne $expectedTotal -and $periodReceivedCount -lt [long]$expectedTotal) {
+                    throw ('Danh sach chua day du: nhan {0}/{1} hoa don nhung API khong tra state tiep.' -f $periodReceivedCount, $expectedTotal)
                 }
                 Write-HddtLog INFO ('[DANH SÁCH] Hoàn tất {0}/{1}, kỳ {2:dd/MM/yyyy}-{3:dd/MM/yyyy}: {4} hóa đơn.' -f $Direction, $family, $period.From, $period.To, ($results.Count - $periodStartCount))
             }
             catch {
                 $errorText = $_.Exception.Message
+                $limitDays = 0
+                if ($_.Exception.Data.Contains('GdtRangeLimitDays')) { $limitDays = [int]$_.Exception.Data['GdtRangeLimitDays'] }
+                if ($limitDays -gt 0 -and ($period.To - $period.From).Days -ge $limitDays) {
+                    for ($i = $periodStartCount; $i -lt $results.Count; $i++) { $null = $replayedInvoices.Add((Get-GdtIndexItemKey $results[$i].GdtIndex)) }
+                    $maxRangeDays = $limitDays
+                    # Xep lai ky hien tai; dau vong lap se chia theo gioi han moi.
+                    $pendingPeriods.Insert(0, $period)
+                    Write-HddtLog WARN ('[DANH SACH] {0}/{1}: GDT gioi han {2} ngay; chia lai ky {3:dd/MM/yyyy}-{4:dd/MM/yyyy} va cac ky tiep theo.' -f $Direction, $family, $limitDays, $period.From, $period.To)
+                    continue
+                }
                 $script:GdtIndexErrors.Add([pscustomobject]@{
                     Direction = $Direction
                     Source = $family

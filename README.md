@@ -4,15 +4,15 @@ Tải XML hóa đơn điện tử **mua vào / bán ra** từ GDT và xuất Exc
 [TaiHoaDonDienTu](https://github.com/dieutx/TaiHoaDonDienTu).
 Có ứng dụng Windows một file EXE và dòng lệnh trên Windows, macOS, Linux.
 
-**[Tải v1.1.2 cho Windows](https://github.com/dieutx/hddt-downloader-windows/releases/download/v1.1.2/HDDT-Downloader-v1.1.2-windows.exe)**
-· [Release & checksum](https://github.com/dieutx/hddt-downloader-windows/releases/tag/v1.1.2)
+**[Tải v1.1.3 cho Windows](https://github.com/dieutx/hddt-downloader-windows/releases/download/v1.1.3/HDDT-Downloader-v1.1.3-windows.exe)**
+· [Release & checksum](https://github.com/dieutx/hddt-downloader-windows/releases/tag/v1.1.3)
 · [Video hướng dẫn](https://www.youtube.com/watch?v=nLWvosy-IM0)
 
 ![Giao diện HDDT Downloader](docs/images/hddt-desktop-v1.1.1.png)
 
 ## Bắt đầu trên Windows
 
-1. Tải và mở **HDDT-Downloader-v1.1.2-windows.exe**; không cần cài đặt hay cài Excel.
+1. Tải và mở **HDDT-Downloader-v1.1.3-windows.exe**; không cần cài đặt hay cài Excel.
 2. Nhập tài khoản GDT, chọn khoảng ngày và loại hóa đơn.
 3. Chọn nơi lưu rồi bấm **Bắt đầu**. Bấm **Dừng an toàn** để xuất phần đã xử lý.
 4. Có XML sẵn: dùng tab **XML có sẵn → Excel**, không cần đăng nhập hay Internet.
@@ -24,8 +24,14 @@ EXE hiện chưa ký số; Windows có thể hiện SmartScreen. Với file tả
 ## Kết quả Excel
 
 Truy vấn hóa đơn máy tính tiền (`sco-query`) tự chia khoảng ngày thành các kỳ
-tối đa 10 ngày và lấy CAPTCHA mới cho từng trang. Hóa đơn thông thường vẫn
-chia theo tháng. API trả lại con trỏ phân trang cũ hoặc kết thúc trước `total`
+tối đa 10 ngày ban đầu và lấy CAPTCHA mới cho từng trang. Khi GDT trả lỗi 400
+giới hạn N ngày (ví dụ 5 hoặc 3), chương trình tự chia lại kỳ và áp dụng N cho
+các kỳ tiếp theo trong cùng lượt truy vấn nguồn/chiều đó. Hóa đơn thông thường
+ban đầu chia theo tháng và cũng tự thích ứng khi nhận giới hạn ngày.
+Giới hạn ngày không bị thử lại như lỗi CAPTCHA. Dữ liệu đã nhận được giữ lại,
+không nhân đôi khi truy vấn lại kỳ nhỏ hơn. Lỗi không xác định hoặc lỗi ở kỳ
+một ngày vẫn được ghi vào báo cáo lỗi.
+API trả lại con trỏ phân trang cũ hoặc kết thúc trước `total`
 sẽ được ghi thành lỗi danh sách; dữ liệu đã nhận vẫn được giữ lại.
 Số hóa đơn mỗi trang gửi lên GDT được giới hạn ở 50, kể cả khi cấu hình cũ
 đặt `PAGE_SIZE=100`, vì máy chủ trả HTTP 500 với trang 100 hóa đơn.
