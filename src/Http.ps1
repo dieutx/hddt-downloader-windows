@@ -1,4 +1,4 @@
-Set-StrictMode -Version 2.0
+﻿Set-StrictMode -Version 2.0
 
 # Thời điểm bắt đầu request gần nhất trong toàn tiến trình. Áp dụng chung cho
 # request danh sách, phân trang và tải XML để tránh dồn request vào máy chủ.
